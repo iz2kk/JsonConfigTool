@@ -1,0 +1,509 @@
+@namespace ConfigTool.Components
+@using System.Globalization
+@using System.Text.Json
+@using System.Text.Json.Nodes
+@using ConfigTool.Models
+
+@if (Node is not null)
+{
+    var kind = JsonEditorNodeFactory.NormalizeKind(Node.Kind);
+    var isContainer = kind is "object" or "array";
+    <div class="ct-json-edit-node @GetKindCssClass(kind) @(IsRoot ? "is-root" : null) @(IsArrayChild ? "is-array-child" : null) @(Node.IsCollapsed ? "is-collapsed" : null)" style="@DepthStyle">
+        <div class="ct-json-edit-node-head">
+            <button class="ct-json-node-drag ct-node-collapse-btn" type="button" title="Thu gọn / mở rộng block" @onclick="ToggleCollapse">
+                <i class="fa-duotone fa-solid @(Node.IsCollapsed ? "fa-chevron-right" : GetKindIcon(kind))"></i>
+            </button>
+
+            @if (!HideRootKey && !IsArrayChild)
+            {
+                <div class="ct-json-node-key">
+                    <label>key</label>
+                    <input class="form-control form-control-sm" list="@KeyListId" @bind="Node.Key" placeholder="Tên key..." />
+                    <datalist id="@KeyListId">
+                        @foreach (var key in KeySuggestions.Take(300))
+                        {
+                            <option value="@key"></option>
+                        }
+                    </datalist>
+                </div>
+            }
+            else if (IsArrayChild)
+            {
+                <div class="ct-json-node-array-index">
+                    <span>item index</span>
+                    <strong>#@Index</strong>
+                </div>
+            }
+            else
+            {
+                <div class="ct-json-node-root-title">
+                    <span>root block</span>
+                    <strong>@(string.IsNullOrWhiteSpace(Node.Key) ? "value" : Node.Key)</strong>
+                </div>
+            }
+
+            <div class="ct-json-node-kind">
+                <label>type</label>
+                <select class="form-select form-select-sm" value="@Node.Kind" disabled="@LockKind" @onchange="ChangeKind">
+                    <option value="string">string</option>
+                    <option value="number">number</option>
+                    <option value="bool">bool</option>
+                    <option value="object">object</option>
+                    <option value="array">array</option>
+                    <option value="json">json raw</option>
+                    <option value="null">null</option>
+                </select>
+            </div>
+
+            <span class="ct-kind-chip @GetKindCssClass(kind)">@kind</span>
+
+            <div class="ct-json-node-actions">
+                @if (isContainer)
+                {
+                    <button class="btn btn-sm btn-outline-secondary" type="button" title="Thu gọn / mở rộng" @onclick="ToggleCollapse">
+                        <i class="fa-duotone fa-solid @(Node.IsCollapsed ? "fa-up-right-and-down-left-from-center" : "fa-down-left-and-up-right-to-center")"></i>
+                    </button>
+                }
+                @if (!IsRoot && Parent is not null)
+                {
+                    <button class="btn btn-sm btn-outline-primary" type="button" title="Chèn item/key phía dưới" @onclick="InsertAfter">
+                        <i class="fa-duotone fa-solid fa-plus"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" type="button" title="Xóa node này" @onclick="RemoveSelf">
+                        <i class="fa-duotone fa-solid fa-minus"></i>
+                    </button>
+                }
+            </div>
+        </div>
+
+        @if (!Node.IsCollapsed)
+        {
+            <div class="ct-json-edit-node-body">
+                @if (kind == "object")
+                {
+                    <div class="ct-json-children-toolbar ct-json-block-toolbar">
+                        <div>
+                            <strong><i class="fa-duotone fa-solid fa-object-group"></i> Object block</strong>
+                            <span>@Node.Children.Count key</span>
+                        </div>
+                        <div class="ct-toolbar-actions">
+                            <button class="btn btn-sm btn-outline-primary" type="button" @onclick="AddChild">
+                                <i class="fa-duotone fa-solid fa-plus"></i> Thêm key
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="AddBulkChildren">
+                                <i class="fa-duotone fa-solid fa-layer-plus"></i> +N
+                            </button>
+                        </div>
+                    </div>
+                    <div class="ct-json-quick-row">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">Số key</span>
+                            <input class="form-control" type="number" min="1" max="500" @bind="Node.BulkCount" />
+                            <button class="btn btn-outline-primary" type="button" @onclick="AddBulkChildren">Tạo nhanh</button>
+                        </div>
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">Import object JSON</span>
+                            <input class="form-control" @bind="Node.QuickInput" placeholder="{ &quot;key&quot;: &quot;value&quot; }" />
+                            <button class="btn btn-outline-success" type="button" @onclick="ReplaceFromJsonQuickInput">Import</button>
+                        </div>
+                    </div>
+                    @if (Node.Children.Count == 0)
+                    {
+                        <div class="ct-json-empty-child"><i class="fa-duotone fa-solid fa-box-open"></i> Object rỗng. Bấm thêm key hoặc import JSON để nhập dữ liệu.</div>
+                    }
+                    <div class="ct-json-children">
+                        @for (var i = 0; i < Node.Children.Count; i++)
+                        {
+                            var child = Node.Children[i];
+                            <JsonTreeFieldEditor @key="child.ClientId" Node="@child" Parent="@Node" Index="@i" IsRoot="false" IsArrayChild="false" KeySuggestions="@KeySuggestions" OnChanged="@OnChanged" />
+                        }
+                    </div>
+                }
+                else if (kind == "array")
+                {
+                    <div class="ct-json-children-toolbar ct-json-block-toolbar">
+                        <div>
+                            <strong><i class="fa-duotone fa-solid fa-list-tree"></i> Array block</strong>
+                            <span>@Node.Children.Count item</span>
+                        </div>
+                        <div class="ct-toolbar-actions">
+                            <button class="btn btn-sm btn-outline-primary" type="button" @onclick="AddChild">
+                                <i class="fa-duotone fa-solid fa-plus"></i> Thêm item
+                            </button>
+                            <button class="btn btn-sm btn-outline-success" type="button" @onclick="AddBulkChildren">
+                                <i class="fa-duotone fa-solid fa-layer-plus"></i> Thêm N
+                            </button>
+                        </div>
+                    </div>
+                    <div class="ct-array-fast-tools">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">Index</span>
+                            <input class="form-control" type="number" min="0" max="999999" title="-1 hoặc bỏ trống = thêm cuối" @bind="Node.InsertIndex" />
+                            <span class="input-group-text">Số lượng</span>
+                            <input class="form-control" type="number" min="1" max="5000" @bind="Node.BulkCount" />
+                            <button class="btn btn-outline-success" type="button" @onclick="AddBulkChildren">Thêm</button>
+                        </div>
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text">Đủ tổng item</span>
+                            <input class="form-control" type="number" min="0" max="200000" @bind="Node.DesiredArrayCount" />
+                            <button class="btn btn-outline-primary" type="button" @onclick="EnsureArrayCount">Cập nhật số lượng</button>
+                        </div>
+                        <div class="input-group input-group-sm ct-array-import-row">
+                            <span class="input-group-text">Nhập nhanh</span>
+                            <select class="form-select" @bind="Node.QuickInputKind">
+                                <option value="string">string</option>
+                                <option value="number">number</option>
+                                <option value="bool">bool</option>
+                                <option value="object">object</option>
+                                <option value="array">array</option>
+                                <option value="json">json raw</option>
+                                <option value="null">null</option>
+                            </select>
+                            <input class="form-control" @bind="Node.QuickInput" placeholder="item 1, item 2 hoặc [1,2,3] / [{...}]" />
+                            <button class="btn btn-outline-success" type="button" @onclick="ImportArrayQuickInput">Import</button>
+                        </div>
+                    </div>
+                    @if (Node.Children.Count == 0)
+                    {
+                        <div class="ct-json-empty-child"><i class="fa-duotone fa-solid fa-box-open"></i> Array rỗng. Dùng +, nhập số lượng hoặc paste item dạng dấu phẩy.</div>
+                    }
+                    <div class="ct-json-children">
+                        @for (var i = 0; i < Node.Children.Count; i++)
+                        {
+                            var child = Node.Children[i];
+                            <JsonTreeFieldEditor @key="child.ClientId" Node="@child" Parent="@Node" Index="@i" IsRoot="false" IsArrayChild="true" KeySuggestions="@KeySuggestions" OnChanged="@OnChanged" />
+                        }
+                    </div>
+                }
+                else if (kind == "bool")
+                {
+                    <select class="form-select form-select-sm ct-json-node-value" @bind="Node.Value">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                    </select>
+                }
+                else if (kind == "null")
+                {
+                    <input class="form-control form-control-sm ct-json-node-value" value="null" disabled />
+                }
+                else if (kind == "json")
+                {
+                    <textarea class="form-control form-control-sm ct-json-node-value ct-json-node-textarea" @bind="Node.Value" rows="5" placeholder="Nhập JSON raw hợp lệ..."></textarea>
+                }
+                else if (Node.UseTextarea)
+                {
+                    <div class="ct-json-node-value-row">
+                        <textarea class="form-control form-control-sm ct-json-node-value ct-json-node-textarea" @bind="Node.Value" rows="3" placeholder="Nhập value..."></textarea>
+                        <button class="btn btn-sm btn-outline-secondary" type="button" title="Đổi sang input" @onclick="ToggleTextarea">
+                            <i class="fa-duotone fa-solid fa-input-text"></i>
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="ct-json-node-value-row">
+                        <input class="form-control form-control-sm ct-json-node-value" @bind="Node.Value" placeholder="Nhập value..." />
+                        <button class="btn btn-sm btn-outline-secondary" type="button" title="Đổi sang textarea" @onclick="ToggleTextarea">
+                            <i class="fa-duotone fa-solid fa-align-left"></i>
+                        </button>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public JsonEditorNode? Node { get; set; }
+    [Parameter] public JsonEditorNode? Parent { get; set; }
+    [Parameter] public int Index { get; set; }
+    [Parameter] public bool IsRoot { get; set; } = true;
+    [Parameter] public bool IsArrayChild { get; set; }
+    [Parameter] public bool HideRootKey { get; set; }
+    [Parameter] public bool LockKind { get; set; }
+    [Parameter] public IReadOnlyList<string> KeySuggestions { get; set; } = [];
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private string DepthStyle => IsRoot ? string.Empty : "--ct-node-depth:1;";
+    private string KeyListId => "ct_keys_" + (Node?.ClientId ?? Guid.NewGuid().ToString("N"));
+
+    private async Task ToggleCollapse()
+    {
+        if (Node is not null)
+        {
+            Node.IsCollapsed = !Node.IsCollapsed;
+            await NotifyChangedAsync();
+        }
+    }
+
+    private async Task AddChild()
+    {
+        if (Node is null)
+        {
+            return;
+        }
+
+        var parentKind = JsonEditorNodeFactory.NormalizeKind(Node.Kind);
+        Node.Children.Add(JsonEditorNodeFactory.CreateDefaultChild(parentKind == "array", Node.Children));
+        await NotifyChangedAsync();
+    }
+
+    private async Task AddBulkChildren()
+    {
+        if (Node is null)
+        {
+            return;
+        }
+
+        var count = Math.Clamp(Node.BulkCount <= 0 ? 1 : Node.BulkCount, 1, 5000);
+        var parentIsArray = JsonEditorNodeFactory.NormalizeKind(Node.Kind) == "array";
+        var insertAt = NormalizeInsertIndex(Node.InsertIndex, Node.Children.Count);
+        for (var i = 0; i < count; i++)
+        {
+            Node.Children.Insert(insertAt + i, JsonEditorNodeFactory.CreateDefaultChild(parentIsArray, Node.Children));
+        }
+
+        await NotifyChangedAsync();
+    }
+
+    private async Task EnsureArrayCount()
+    {
+        if (Node is null || JsonEditorNodeFactory.NormalizeKind(Node.Kind) != "array")
+        {
+            return;
+        }
+
+        var desired = Math.Clamp(Node.DesiredArrayCount, 0, 200000);
+        while (Node.Children.Count < desired)
+        {
+            Node.Children.Add(JsonEditorNodeFactory.CreateDefaultChild(true, Node.Children));
+        }
+
+        await NotifyChangedAsync();
+    }
+
+    private async Task InsertAfter()
+    {
+        if (Parent is null || Node is null)
+        {
+            return;
+        }
+
+        var parentKind = JsonEditorNodeFactory.NormalizeKind(Parent.Kind);
+        var insertIndex = Parent.Children.IndexOf(Node);
+        if (insertIndex < 0)
+        {
+            Parent.Children.Add(JsonEditorNodeFactory.CreateDefaultChild(parentKind == "array", Parent.Children));
+            await NotifyChangedAsync();
+            return;
+        }
+
+        Parent.Children.Insert(insertIndex + 1, JsonEditorNodeFactory.CreateDefaultChild(parentKind == "array", Parent.Children));
+        await NotifyChangedAsync();
+    }
+
+    private async Task RemoveSelf()
+    {
+        if (Parent is not null && Node is not null)
+        {
+            Parent.Children.Remove(Node);
+            await NotifyChangedAsync();
+        }
+    }
+
+    private async Task ToggleTextarea()
+    {
+        if (Node is not null)
+        {
+            Node.UseTextarea = !Node.UseTextarea;
+            await NotifyChangedAsync();
+        }
+    }
+
+    private async Task ChangeKind(ChangeEventArgs args)
+    {
+        if (Node is null || LockKind)
+        {
+            return;
+        }
+
+        var nextKind = JsonEditorNodeFactory.NormalizeKind(args.Value?.ToString());
+        if (string.Equals(nextKind, JsonEditorNodeFactory.NormalizeKind(Node.Kind), StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        Node.Kind = nextKind;
+        Node.Children.Clear();
+        Node.Value = JsonEditorNodeFactory.DefaultValue(nextKind);
+        Node.UseTextarea = nextKind is "json";
+        Node.IsCollapsed = false;
+        await NotifyChangedAsync();
+    }
+
+    private async Task ReplaceFromJsonQuickInput()
+    {
+        if (Node is null || string.IsNullOrWhiteSpace(Node.QuickInput))
+        {
+            return;
+        }
+
+        try
+        {
+            var parsed = JsonNode.Parse(Node.QuickInput);
+            if (parsed is null)
+            {
+                return;
+            }
+
+            var replacement = JsonEditorNodeFactory.FromJsonNode(Node.Key, parsed);
+            CopyNodeContent(Node, replacement, keepKey: true);
+            Node.QuickInput = string.Empty;
+            await NotifyChangedAsync();
+        }
+        catch
+        {
+            // Keep typed text visible so the user can fix it.
+        }
+    }
+
+    private async Task ImportArrayQuickInput()
+    {
+        if (Node is null || JsonEditorNodeFactory.NormalizeKind(Node.Kind) != "array" || string.IsNullOrWhiteSpace(Node.QuickInput))
+        {
+            return;
+        }
+
+        var items = BuildNodesFromQuickInput(Node.QuickInput, Node.QuickInputKind);
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var insertAt = NormalizeInsertIndex(Node.InsertIndex, Node.Children.Count);
+        for (var i = 0; i < items.Count; i++)
+        {
+            Node.Children.Insert(insertAt + i, items[i]);
+        }
+
+        Node.QuickInput = string.Empty;
+        await NotifyChangedAsync();
+    }
+
+    private async Task NotifyChangedAsync()
+    {
+        if (OnChanged.HasDelegate)
+        {
+            await OnChanged.InvokeAsync();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static List<JsonEditorNode> BuildNodesFromQuickInput(string input, string? kind)
+    {
+        var normalizedKind = JsonEditorNodeFactory.NormalizeKind(kind);
+        var text = input.Trim();
+        var result = new List<JsonEditorNode>();
+
+        if (normalizedKind is "json" or "object" or "array" || text.StartsWith('[') || text.StartsWith('{'))
+        {
+            try
+            {
+                var parsed = JsonNode.Parse(text);
+                if (parsed is JsonArray array)
+                {
+                    foreach (var item in array)
+                    {
+                        result.Add(JsonEditorNodeFactory.FromJsonNode(string.Empty, item));
+                    }
+
+                    return result;
+                }
+
+                result.Add(JsonEditorNodeFactory.FromJsonNode(string.Empty, parsed));
+                return result;
+            }
+            catch when (normalizedKind is not "object" and not "array")
+            {
+                // Fall back to comma mode.
+            }
+        }
+
+        foreach (var token in text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            result.Add(CreateScalarNodeFromText(token, normalizedKind));
+        }
+
+        return result;
+    }
+
+    private static JsonEditorNode CreateScalarNodeFromText(string token, string normalizedKind)
+    {
+        if (normalizedKind == "null")
+        {
+            return JsonEditorNodeFactory.FromJsonNode(string.Empty, null);
+        }
+
+        if (normalizedKind == "bool" && bool.TryParse(token, out var boolValue))
+        {
+            return JsonEditorNodeFactory.FromJsonNode(string.Empty, JsonValue.Create(boolValue));
+        }
+
+        if (normalizedKind == "number")
+        {
+            if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var longValue))
+            {
+                return JsonEditorNodeFactory.FromJsonNode(string.Empty, JsonValue.Create(longValue));
+            }
+
+            if (double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var doubleValue))
+            {
+                return JsonEditorNodeFactory.FromJsonNode(string.Empty, JsonValue.Create(doubleValue));
+            }
+        }
+
+        return JsonEditorNodeFactory.FromJsonNode(string.Empty, JsonValue.Create(token));
+    }
+
+    private static void CopyNodeContent(JsonEditorNode target, JsonEditorNode source, bool keepKey)
+    {
+        if (!keepKey)
+        {
+            target.Key = source.Key;
+        }
+
+        target.Kind = source.Kind;
+        target.Value = source.Value;
+        target.UseTextarea = source.UseTextarea;
+        target.IsCollapsed = false;
+        target.Children.Clear();
+        foreach (var child in source.Children)
+        {
+            target.Children.Add(child);
+        }
+    }
+
+    private static int NormalizeInsertIndex(int index, int count)
+    {
+        if (index < 0)
+        {
+            return count;
+        }
+
+        return Math.Clamp(index, 0, count);
+    }
+
+    private static string GetKindIcon(string? kind) => JsonEditorNodeFactory.NormalizeKind(kind) switch
+    {
+        "array" => "fa-list-tree",
+        "object" => "fa-object-group",
+        "number" => "fa-hashtag",
+        "bool" => "fa-toggle-on",
+        "null" => "fa-empty-set",
+        "json" => "fa-code",
+        _ => "fa-input-text"
+    };
+
+    private static string GetKindCssClass(string? kind) => "is-kind-" + JsonEditorNodeFactory.NormalizeKind(kind);
+}

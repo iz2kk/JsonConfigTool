@@ -1,0 +1,31 @@
+@inherits LayoutComponentBase
+
+<div class="ct-shell">
+    <header class="ct-topbar">
+        <div class="ct-topbar-inner">
+            <div class="ct-brand ct-brand-horizontal">
+                <div class="ct-brand-icon"><i class="fa-duotone fa-solid fa-sliders"></i></div>
+                <div>
+                    <div class="ct-brand-title">Config Tool</div>
+                    <div class="ct-brand-subtitle">JSON,SQL Admin</div>
+                </div>
+            </div>
+
+            <nav class="ct-horizontal-nav" aria-label="Config tool navigation">
+                <NavLink class="ct-nav-pill" href="" Match="NavLinkMatch.All">
+                    <i class="fa-duotone fa-solid fa-table-list"></i> JSON
+                </NavLink>
+                <NavLink class="ct-nav-pill" href="sql">
+                    <i class="fa-duotone fa-solid fa-database"></i> SQL Admin
+                </NavLink>
+                <span class="ct-nav-pill"><i class="fa-duotone fa-solid fa-signal-stream"></i> SignalR Realtime</span>
+                <span class="ct-nav-pill"><i class="fa-duotone fa-solid fa-rotate"></i> Unity Sync</span>
+                <span class="ct-nav-pill"><i class="fa-duotone fa-solid fa-layer-group"></i> Bootstrap UI</span>
+            </nav>
+        </div>
+    </header>
+
+    <main class="ct-main">
+        @Body
+    </main>
+</div>

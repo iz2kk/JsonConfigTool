@@ -1,0 +1,1922 @@
+@page "/sql"
+@implements IAsyncDisposable
+@inject ConfigSignalRHost SignalRHost
+
+<PageTitle>SQL Admin</PageTitle>
+
+<div class="ct-page ct-sql-page">
+    <section class="ct-hero card border-0 shadow-sm">
+        <div class="card-body p-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div>
+                    <div class="ct-eyebrow"><i class="fa-duotone fa-solid fa-database"></i> SQL / MySQL / MariaDB / MSSQL</div>
+                    <h1 class="ct-title mb-2">SQL Admin </h1>
+                    <p class="ct-muted mb-0">Connect lưu ở <code>@ConnectFilePath</code>, chạy qua SignalR local server.</p>
+                </div>
+                <div class="ct-status-pill @(IsConnected ? "is-online" : "is-offline")">
+                    <i class="fa-duotone fa-solid @(IsConnected ? "fa-circle-check" : "fa-plug-circle-xmark")"></i>
+                    @(IsConnected ? "SignalR đã kết nối" : "SignalR chưa kết nối")
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(StatusMessage))
+    {
+        <div class="alert @(StatusIsError ? "alert-danger" : "alert-success") ct-alert shadow-sm" role="alert">
+            <i class="fa-duotone fa-solid @(StatusIsError ? "fa-triangle-exclamation" : "fa-circle-info")"></i>
+            <span>@StatusMessage</span>
+            <button type="button" class="btn-close ms-auto" aria-label="Close" @onclick="ClearStatus"></button>
+        </div>
+    }
+
+    <section class="card border-0 shadow-sm ct-panel ct-sql-accounts-panel">
+        <div class="card-body p-3 p-lg-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                <div>
+                    <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-plug-circle-bolt"></i> Multi tài khoản SQL</h2>
+                    <div class="ct-muted small">Danh sách tài khoản full width. Form thêm/sửa/xóa mở bằng modal để không chiếm màn hình quản trị.</div>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@Busy" @onclick="() => LoadProfilesAsync(true)"><i class="fa-duotone fa-solid fa-rotate"></i> Tải lại</button>
+                    <button type="button" class="btn btn-sm btn-primary" @onclick="NewProfile"><i class="fa-duotone fa-solid fa-plus"></i> Thêm tài khoản</button>
+                </div>
+            </div>
+
+            <div class="ct-sql-account-toolbar mb-3">
+                <div class="ct-sql-account-picker">
+                    <label class="ct-muted small mb-1 d-block">Tài khoản đang dùng</label>
+                    <select class="form-select" value="@(SelectedProfile?.Id ?? string.Empty)" @onchange="OnProfileSelectChangedAsync">
+                        @foreach (var profile in Profiles)
+                        {
+                            <option value="@profile.Id">@NormalizeSqlType(profile.TypeConnect) · @profile.Name · @BuildEndpoint(profile)</option>
+                        }
+                    </select>
+                </div>
+                <div class="ct-sql-account-summary">
+                    @if (SelectedProfile is null)
+                    {
+                        <span><i class="fa-duotone fa-solid fa-circle-info"></i> Chưa chọn tài khoản SQL.</span>
+                    }
+                    else
+                    {
+                        <span><i class="fa-duotone fa-solid @GetSqlTypeIcon(SelectedProfile.TypeConnect)"></i> @NormalizeSqlType(SelectedProfile.TypeConnect)</span>
+                        <span><i class="fa-duotone fa-solid fa-network-wired"></i> @BuildEndpoint(SelectedProfile)</span>
+                        <span><i class="fa-duotone fa-solid fa-database"></i> @(string.IsNullOrWhiteSpace(SelectedProfile.Database) ? "chưa chọn DB" : SelectedProfile.Database)</span>
+                    }
+                </div>
+            </div>
+
+            <div class="ct-sql-profile-list is-multi-account is-full-width">
+                @if (Profiles.Count == 0)
+                {
+                    <div class="ct-empty-inline"><i class="fa-duotone fa-solid fa-inbox"></i> Chưa có tài khoản SQL nào trong connect.json.</div>
+                }
+                @foreach (var profile in Profiles)
+                {
+                    <div class="ct-sql-profile-card @(SelectedProfile?.Id == profile.Id ? "active" : null)" @key="profile.Id">
+                        <button type="button" class="ct-sql-card-main" @onclick="() => SelectProfileAsync(profile)">
+                            <span class="d-flex align-items-center justify-content-between gap-2">
+                                <strong><i class="fa-duotone fa-solid @GetSqlTypeIcon(profile.TypeConnect)"></i> @profile.Name</strong>
+                                <span class="badge text-bg-light border">@NormalizeSqlType(profile.TypeConnect)</span>
+                            </span>
+                            <span class="small mt-1 d-block">@BuildEndpoint(profile)</span>
+                            <span class="small text-truncate d-block">DB: @(string.IsNullOrWhiteSpace(profile.Database) ? "chưa chọn" : profile.Database)</span>
+                        </button>
+                        <div class="ct-sql-profile-actions">
+                            <button type="button" class="btn btn-sm btn-outline-primary ct-profile-primary-action" @onclick="() => SelectProfileAsync(profile)"><i class="fa-duotone fa-solid fa-circle-check"></i> Chọn</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenEditProfile(profile)"><i class="fa-duotone fa-solid fa-pen"></i> Sửa</button>
+                            <button type="button" class="btn btn-sm btn-outline-info" @onclick="() => DuplicateProfile(profile)"><i class="fa-duotone fa-solid fa-copy"></i> Nhân bản</button>
+                            <button type="button" class="btn btn-sm btn-outline-success" @onclick="() => TestProfileAsync(profile.Id)"><i class="fa-duotone fa-solid fa-signal-stream"></i> Test</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => OpenDeleteProfile(profile)"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="card border-0 shadow-sm ct-panel">
+        <div class="card-body p-3 p-lg-4">
+            <ul class="nav nav-pills ct-sql-tabs mb-3" role="tablist">
+                <li class="nav-item"><button type="button" class="nav-link @(SqlTab == "browser" ? "active" : null)" @onclick='() => SetSqlTab("browser")'><i class="fa-duotone fa-solid fa-table-tree"></i> Database / Bảng / Cột</button></li>
+                <li class="nav-item"><button type="button" class="nav-link @(SqlTab == "records" ? "active" : null)" @onclick='() => SetSqlTab("records")'><i class="fa-duotone fa-solid fa-table-list"></i> CRUD record</button></li>
+                <li class="nav-item"><button type="button" class="nav-link @(SqlTab == "query" ? "active" : null)" @onclick='() => SetSqlTab("query")'><i class="fa-duotone fa-solid fa-terminal"></i> Query mẫu</button></li>
+                <li class="nav-item"><button type="button" class="nav-link @(SqlTab == "importexport" ? "active" : null)" @onclick='() => SetSqlTab("importexport")'><i class="fa-duotone fa-solid fa-file-export"></i> Import / Export</button></li>
+            </ul>
+
+            @if (SqlTab == "browser")
+            {
+                <div class="ct-sql-browser-toolbar mb-3">
+                    <button class="btn btn-primary" type="button" disabled="@(Busy || SelectedProfile is null)" @onclick="OpenCreateDatabase"><i class="fa-duotone fa-solid fa-database-circle-plus"></i> Tạo database</button>
+                    <button class="btn btn-outline-secondary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(SelectedDatabase))" @onclick="OpenRenameDatabase"><i class="fa-duotone fa-solid fa-pen-to-square"></i> Sửa database</button>
+                    <button class="btn btn-outline-danger" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(SelectedDatabase))" @onclick="OpenDropDatabase"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa database</button>
+                    <button class="btn btn-success" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(SelectedDatabase))" @onclick="OpenCreateTable"><i class="fa-duotone fa-solid fa-table-circle-plus"></i> Tạo bảng</button>
+                    <button class="btn btn-outline-secondary" type="button" disabled="@(Busy || SelectedTable is null)" @onclick="OpenRenameTable"><i class="fa-duotone fa-solid fa-table-cells"></i> Sửa bảng</button>
+                    <button class="btn btn-outline-danger" type="button" disabled="@(Busy || SelectedTable is null)" @onclick="OpenDropTable"><i class="fa-duotone fa-solid fa-table-cells-large"></i> Xóa bảng</button>
+                </div>
+
+                <div class="ct-sql-browser-grid">
+                    <div class="ct-sql-browser-pane">
+                        <div class="ct-pane-head"><strong><i class="fa-duotone fa-solid fa-database"></i> Databases</strong><button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(Busy || SelectedProfile is null)" @onclick="LoadDatabasesAsync"><i class="fa-duotone fa-solid fa-rotate"></i></button></div>
+                        <div class="ct-sql-list-scroll">
+                            @foreach (var db in Databases)
+                            {
+                                <button type="button" class="ct-sql-list-item @(SelectedDatabase == db.Name ? "active" : null)" @onclick="() => SelectDatabaseAsync(db.Name)" @oncontextmenu:preventDefault="true" @oncontextmenu="args => OpenDatabaseContextMenu(args, db.Name)"><i class="fa-duotone fa-solid fa-database"></i> @db.Name</button>
+                            }
+                        </div>
+                    </div>
+                    <div class="ct-sql-browser-pane">
+                        <div class="ct-pane-head"><strong><i class="fa-duotone fa-solid fa-table"></i> Bảng / view</strong><input class="form-control form-control-sm" placeholder="Tìm bảng..." value="@TableSearch" @oninput="OnTableSearchInputAsync" /></div>
+                        <div class="ct-sql-list-scroll">
+                            @foreach (var table in Tables)
+                            {
+                                <button type="button" class="ct-sql-list-item @(SelectedTable?.FullName == table.FullName ? "active" : null)" @onclick="() => SelectTableAsync(table)" @oncontextmenu:preventDefault="true" @oncontextmenu="args => OpenTableContextMenu(args, table)"><span><i class="fa-duotone fa-solid fa-table"></i> @table.FullName</span><small>@table.Type</small></button>
+                            }
+                        </div>
+                    </div>
+                    <div class="ct-sql-browser-pane is-wide">
+                        <div class="ct-pane-head"><strong><i class="fa-duotone fa-solid fa-columns-3"></i> Cột dạng block</strong><button class="btn btn-sm btn-primary" type="button" disabled="@(Busy || SelectedTable is null)" @onclick="OpenAddColumn"><i class="fa-duotone fa-solid fa-plus"></i> Thêm cột</button></div>
+                        <div class="ct-sql-block-list">
+                            @foreach (var col in Columns)
+                            {
+                                <div class="ct-sql-block ct-contextable" @key="col.Name" @oncontextmenu:preventDefault="true" @oncontextmenu="args => OpenColumnContextMenu(args, col)">
+                                    <div class="ct-sql-block-head">
+                                        <div><strong><i class="fa-duotone fa-solid fa-keyboard"></i> @col.Name</strong><div class="ct-muted small">#@col.Ordinal · @col.DataType</div></div>
+                                        <div class="d-flex flex-wrap gap-1"><span class="badge text-bg-light border">@(col.IsNullable ? "NULL" : "NOT NULL")</span>@if (col.IsPrimaryKey){<span class="badge text-bg-warning">PRIMARY</span>}</div>
+                                    </div>
+                                    <div class="ct-sql-block-actions">
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenEditColumn(col)"><i class="fa-duotone fa-solid fa-pen"></i> Sửa</button>
+                                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => OpenDropColumn(col)"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa</button>
+                                    </div>
+                                </div>
+                            }
+                            @if (Columns.Count == 0)
+                            {
+                                <div class="ct-empty-inline"><i class="fa-duotone fa-solid fa-inbox"></i> Chưa chọn bảng hoặc bảng chưa có cột.</div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+            else if (SqlTab == "records")
+            {
+                <div class="ct-sql-record-toolbar">
+                    <div>
+                        <strong><i class="fa-duotone fa-solid fa-table-list"></i> @(SelectedDatabase ?? "database") / @(SelectedTable?.FullName ?? "table")</strong>
+                        <div class="ct-muted small">Record dạng block, tìm kiếm realtime qua SignalR.</div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 align-items-center">
+                        <input class="form-control" placeholder="Tìm key/item/record..." value="@RecordSearch" @oninput="OnRecordSearchInputAsync" />
+                        <select class="form-select" value="@RecordPageSize" @onchange="OnRecordPageSizeChangedAsync"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100">100</option></select>
+                        <button type="button" class="btn btn-primary" disabled="@(Busy || SelectedTable is null)" @onclick="LoadRecordsAsync"><i class="fa-duotone fa-solid fa-magnifying-glass"></i> Tải</button>
+                        <button type="button" class="btn btn-success" disabled="@(Busy || SelectedTable is null || Columns.Count == 0)" @onclick="OpenInsertRecord"><i class="fa-duotone fa-solid fa-plus"></i> Thêm record</button>
+                    </div>
+                </div>
+
+                <div class="ct-sql-record-block-grid mt-3">
+                    @if (RecordPage?.Rows?.Count > 0)
+                    {
+                        @foreach (var row in RecordPage.Rows)
+                        {
+                            <div class="ct-sql-record-block ct-contextable" @key="string.Join('|', row.Values)" @oncontextmenu:preventDefault="true" @oncontextmenu="args => OpenRecordContextMenu(args, row)">
+                                <div class="ct-sql-block-head">
+                                    <div><strong><i class="fa-duotone fa-solid fa-cube"></i> Record</strong><div class="ct-muted small">@Columns.Count cột</div></div>
+                                    <div class="ct-sql-block-actions"><button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => OpenEditRecord(row)"><i class="fa-duotone fa-solid fa-pen"></i> Sửa</button><button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => OpenDeleteRecord(row)"><i class="fa-duotone fa-solid fa-trash"></i> Xóa</button></div>
+                                </div>
+                                <div class="ct-sql-record-fields">
+                                    @foreach (var column in Columns.Take(12))
+                                    {
+                                        <div class="ct-sql-record-field"><span>@column.Name</span><code>@(row.TryGetValue(column.Name, out var value) ? value : null)</code></div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <div class="ct-empty-inline"><i class="fa-duotone fa-solid fa-inbox"></i> Chưa có record.</div>
+                    }
+                </div>
+
+                <div class="ct-pagination p-3 border-top d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3">
+                    <div class="ct-muted small">Trang @RecordPageNumber / @(RecordPage?.TotalPages ?? 1) · Tổng @(RecordPage?.TotalRows ?? 0) record</div>
+                    <div class="btn-group"><button class="btn btn-outline-secondary" type="button" disabled="@(RecordPageNumber <= 1 || Busy)" @onclick="() => ChangeRecordPageAsync(RecordPageNumber - 1)"><i class="fa-duotone fa-solid fa-chevron-left"></i> Trước</button><button class="btn btn-outline-secondary" type="button" disabled="@(RecordPage is null || RecordPageNumber >= RecordPage.TotalPages || Busy)" @onclick="() => ChangeRecordPageAsync(RecordPageNumber + 1)">Sau <i class="fa-duotone fa-solid fa-chevron-right"></i></button></div>
+                </div>
+            }
+            else if (SqlTab == "query")
+            {
+                <div class="ct-query-studio ct-query-studio-pro">
+                    <aside class="ct-query-schema-menu">
+                        <div class="ct-pane-head">
+                            <strong><i class="fa-duotone fa-solid fa-list-tree"></i> Menu bảng / cột / key</strong>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@(Busy || SelectedProfile is null || string.IsNullOrWhiteSpace(SelectedDatabase))" @onclick="LoadTablesAsync"><i class="fa-duotone fa-solid fa-rotate"></i></button>
+                        </div>
+                        <input class="form-control form-control-sm mb-2" placeholder="Tìm bảng, cột, key..." value="@QueryObjectSearch" @oninput="OnQueryObjectSearchInput" />
+
+                        <div class="ct-query-menu-section">
+                            <div class="ct-query-menu-title"><i class="fa-duotone fa-solid fa-table"></i> Bảng / view <span>@GetQueryTables().Count</span></div>
+                            <div class="ct-query-menu-list">
+                                @foreach (var table in GetQueryTables())
+                                {
+                                    <button type="button"
+                                            class="ct-query-menu-item @(SelectedTable?.FullName == table.FullName ? "active" : null)"
+                                            title="Click để chọn, double click để chèn vào query"
+                                            @onclick="() => SelectTableFromQueryAsync(table)"
+                                            @ondblclick="() => InsertTableIntoQueryAsync(table)">
+                                        <span><i class="fa-duotone fa-solid fa-table"></i> @table.FullName</span>
+                                        <small>@table.Type</small>
+                                    </button>
+                                }
+                            </div>
+                        </div>
+
+                        <div class="ct-query-menu-section">
+                            <div class="ct-query-menu-title"><i class="fa-duotone fa-solid fa-columns-3"></i> Cột / key <span>@GetQueryColumns().Count</span></div>
+                            <div class="ct-query-menu-list is-columns">
+                                @foreach (var column in GetQueryColumns())
+                                {
+                                    <button type="button"
+                                            class="ct-query-menu-item is-column @(column.IsPrimaryKey ? "is-key" : null)"
+                                            title="Click để chọn nhanh WHERE, double click để chèn cột"
+                                            @onclick="() => InsertWhereColumnIntoQuery(column)"
+                                            @ondblclick="() => InsertColumnIntoQuery(column)">
+                                        <span><i class="fa-duotone fa-solid @(column.IsPrimaryKey ? "fa-key" : "fa-input-text")"></i> @column.Name</span>
+                                        <small>@column.DataType</small>
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    </aside>
+
+                    <div class="ct-query-editor-panel">
+                        <div class="ct-pane-head">
+                            <strong><i class="fa-duotone fa-solid fa-terminal"></i> Query nhanh</strong>
+                            <span class="ct-muted small">Double click bảng/cột bên trái để chèn nhanh</span>
+                        </div>
+
+                        <div class="ct-query-quick-builder">
+                            <button type="button" class="btn btn-sm btn-outline-primary" disabled="@(SelectedTable is null)" @onclick="BuildSelectQuery"><i class="fa-duotone fa-solid fa-table-list"></i> SELECT</button>
+                            <button type="button" class="btn btn-sm btn-outline-success" disabled="@(SelectedTable is null || Columns.Count == 0)" @onclick="BuildInsertQuery"><i class="fa-duotone fa-solid fa-square-plus"></i> INSERT</button>
+                            <button type="button" class="btn btn-sm btn-outline-warning" disabled="@(SelectedTable is null || Columns.Count == 0)" @onclick="BuildUpdateQuery"><i class="fa-duotone fa-solid fa-pen-to-square"></i> UPDATE</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" disabled="@(SelectedTable is null || Columns.Count == 0)" @onclick="BuildDeleteQuery"><i class="fa-duotone fa-solid fa-trash-can"></i> DELETE</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(SelectedTable is null)" @onclick="InsertSelectedTableIntoQuery"><i class="fa-duotone fa-solid fa-arrow-turn-down-right"></i> Chèn bảng</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(Columns.Count == 0)" @onclick="InsertAllColumnsIntoQuery"><i class="fa-duotone fa-solid fa-columns-3"></i> Chèn all cột</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@(Columns.All(x => !x.IsPrimaryKey))" @onclick="InsertPrimaryWhereIntoQuery"><i class="fa-duotone fa-solid fa-key"></i> WHERE key</button>
+                        </div>
+
+                        <div class="ct-sql-template-grid mb-3">
+                            @foreach (var template in QueryTemplates)
+                            {
+                                <button type="button" class="ct-sql-template-card" @onclick="() => UseTemplate(template)">
+                                    <strong><i class="fa-duotone fa-solid @template.Icon"></i> @template.Title</strong>
+                                    <span>@template.Description</span>
+                                </button>
+                            }
+                        </div>
+
+                        <textarea class="form-control ct-sql-query-box" rows="14" @bind="QueryText" placeholder="SELECT * FROM table_name LIMIT 100;"></textarea>
+                        <div class="d-flex flex-wrap gap-2 align-items-center mt-2">
+                            <span class="input-group input-group-sm" style="max-width:220px"><span class="input-group-text">Max rows</span><input class="form-control" type="number" min="1" max="5000" @bind="QueryMaxRows" /></span>
+                            <button type="button" class="btn btn-primary" disabled="@(Busy || SelectedProfile is null)" @onclick="RunQueryAsync"><i class="fa-duotone fa-solid fa-play"></i> Chạy query</button>
+                            <button type="button" class="btn btn-outline-secondary" @onclick="ClearQuery"><i class="fa-duotone fa-solid fa-eraser"></i> Xóa query</button>
+                        </div>
+                    </div>
+
+                    <div class="ct-query-result-panel">
+                        <div class="ct-pane-head">
+                            <strong><i class="fa-duotone fa-solid fa-square-poll-horizontal"></i> Kết quả + CRUD trực tiếp</strong>
+                            <span>@QueryResult?.Message</span>
+                        </div>
+
+                        @if (CanCrudQueryResult)
+                        {
+                            <div class="ct-query-inline-add">
+                                <div class="ct-query-inline-add-head">
+                                    <strong><i class="fa-duotone fa-solid fa-square-plus"></i> Thêm record vào @SelectedTable?.FullName</strong>
+                                    <button type="button" class="btn btn-sm btn-success" disabled="@Busy" @onclick="InsertQueryResultRowAsync"><i class="fa-duotone fa-solid fa-floppy-disk"></i> Insert</button>
+                                </div>
+                                <div class="ct-query-inline-grid">
+                                    @foreach (var column in QueryCrudColumns)
+                                    {
+                                        <label class="ct-query-cell-editor" @key="column.Name">
+                                            <span>@column.Name @if (column.IsPrimaryKey) { <i class="fa-duotone fa-solid fa-key text-warning"></i> }</span>
+                                            <input class="form-control form-control-sm" value="@GetQueryNewValue(column.Name)" @oninput="args => SetQueryNewValue(column.Name, args.Value?.ToString())" placeholder="@column.DataType" />
+                                        </label>
+                                    }
+                                </div>
+                            </div>
+                        }
+
+                        @RenderQueryCrudRows()
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="ct-query-studio">
+                    <div class="ct-query-left">
+                        <div class="ct-pane-head"><strong><i class="fa-duotone fa-solid fa-file-export"></i> Export SQL</strong></div>
+                        <div class="ct-sql-connect-form mb-3"><div class="ct-form-block"><label class="form-label">Max rows mỗi bảng</label><input class="form-control" type="number" min="1" max="5000" @bind="ExportMaxRows" /></div><div class="ct-form-block ct-form-switches"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="expStruct" @bind="ExportStructure" /><label class="form-check-label" for="expStruct">Gồm cấu trúc</label></div><div class="form-check form-switch"><input class="form-check-input" type="checkbox" id="expData" @bind="ExportData" /><label class="form-check-label" for="expData">Gồm dữ liệu</label></div></div></div>
+                        <button class="btn btn-primary" type="button" disabled="@(Busy || SelectedProfile is null || string.IsNullOrWhiteSpace(SelectedDatabase))" @onclick="RunExportAsync"><i class="fa-duotone fa-solid fa-file-export"></i> Export database/bảng đang chọn</button>
+                        <textarea class="form-control ct-sql-query-box mt-3" rows="14" @bind="ExportText" placeholder="Script export sẽ hiện ở đây để copy ra file .sql"></textarea>
+                    </div>
+                    <div class="ct-query-right">
+                        <div class="ct-pane-head"><strong><i class="fa-duotone fa-solid fa-file-import"></i> Import SQL</strong></div>
+                        <textarea class="form-control ct-sql-query-box" rows="18" @bind="ImportText" placeholder="Paste script .sql vào đây rồi bấm Import"></textarea>
+                        <button class="btn btn-success mt-3" type="button" disabled="@(Busy || SelectedProfile is null)" @onclick="RunImportAsync"><i class="fa-duotone fa-solid fa-file-import"></i> Import vào database đang chọn</button>
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+</div>
+
+
+@if (ShowSqlContextMenu)
+{
+    <div class="ct-sql-context-backdrop" @onclick="CloseSqlContextMenu"></div>
+    <div class="ct-sql-context-menu shadow-lg" style="@SqlContextMenuStyle" role="menu">
+        <div class="ct-sql-context-head">
+            <i class="fa-duotone fa-solid @SqlContextIcon"></i>
+            <div>
+                <strong>@SqlContextTitle</strong>
+                <span>@SqlContextSubtitle</span>
+            </div>
+        </div>
+        <div class="ct-sql-context-actions">
+            @if (SqlContextKind == "database")
+            {
+                <button type="button" @onclick="SelectContextDatabaseAsync"><i class="fa-duotone fa-solid fa-hand-pointer"></i> Chọn database</button>
+                <button type="button" @onclick="InsertContextDatabaseUseQuery"><i class="fa-duotone fa-solid fa-terminal"></i> Chèn USE vào query</button>
+                <button type="button" @onclick="InsertContextDatabaseName"><i class="fa-duotone fa-solid fa-copy"></i> Chèn tên DB</button>
+                <button type="button" @onclick="OpenRenameDatabaseFromContext"><i class="fa-duotone fa-solid fa-pen-to-square"></i> Sửa / đổi tên DB</button>
+                <button type="button" @onclick="OpenCreateTableFromContext"><i class="fa-duotone fa-solid fa-table-circle-plus"></i> Tạo bảng trong DB</button>
+                <button type="button" @onclick="ExportContextDatabase"><i class="fa-duotone fa-solid fa-file-export"></i> Xuất dữ liệu DB</button>
+                <button type="button" class="danger" @onclick="OpenDropDatabaseFromContext"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa database</button>
+            }
+            else if (SqlContextKind == "table")
+            {
+                <button type="button" @onclick="SelectContextTableAsync"><i class="fa-duotone fa-solid fa-hand-pointer"></i> Chọn bảng</button>
+                <button type="button" @onclick="InsertContextTableName"><i class="fa-duotone fa-solid fa-copy"></i> Chèn tên bảng</button>
+                <button type="button" @onclick="InsertContextSelectQuery"><i class="fa-duotone fa-solid fa-list"></i> SELECT bảng</button>
+                <button type="button" @onclick="OpenCreateColumnFromContext"><i class="fa-duotone fa-solid fa-plus"></i> Thêm cột</button>
+                <button type="button" @onclick="OpenRenameTableFromContext"><i class="fa-duotone fa-solid fa-pen-to-square"></i> Sửa bảng</button>
+                <button type="button" @onclick="CopyContextBlock"><i class="fa-duotone fa-solid fa-copy"></i> Copy block</button>
+                <button type="button" @onclick="PasteContextBlockAsync"><i class="fa-duotone fa-solid fa-paste"></i> Paste block</button>
+                <button type="button" @onclick="CutContextBlock"><i class="fa-duotone fa-solid fa-scissors"></i> Cut</button>
+                <button type="button" class="danger" @onclick="OpenDropTableFromContext"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa bảng</button>
+            }
+            else if (SqlContextKind == "column")
+            {
+                <button type="button" @onclick="InsertContextColumnName"><i class="fa-duotone fa-solid fa-copy"></i> Chèn tên cột</button>
+                <button type="button" @onclick="InsertContextColumnWhere"><i class="fa-duotone fa-solid fa-filter"></i> Chèn WHERE cột</button>
+                <button type="button" @onclick="OpenEditColumnFromContext"><i class="fa-duotone fa-solid fa-pen"></i> Sửa cột</button>
+                <button type="button" @onclick="CopyContextBlock"><i class="fa-duotone fa-solid fa-copy"></i> Copy cột</button>
+                <button type="button" @onclick="PasteContextBlockAsync"><i class="fa-duotone fa-solid fa-paste"></i> Paste cột</button>
+                <button type="button" @onclick="CutContextBlock"><i class="fa-duotone fa-solid fa-scissors"></i> Cut cột</button>
+                <button type="button" class="danger" @onclick="OpenDropColumnFromContext"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa cột</button>
+            }
+            else if (SqlContextKind == "record")
+            {
+                <button type="button" @onclick="OpenEditRecordFromContext"><i class="fa-duotone fa-solid fa-pen"></i> Sửa record</button>
+                <button type="button" @onclick="InsertContextRecordWhere"><i class="fa-duotone fa-solid fa-key"></i> Query theo key</button>
+                <button type="button" @onclick="CopyContextBlock"><i class="fa-duotone fa-solid fa-copy"></i> Copy record</button>
+                <button type="button" @onclick="PasteContextBlockAsync"><i class="fa-duotone fa-solid fa-paste"></i> Paste record</button>
+                <button type="button" @onclick="CutContextBlock"><i class="fa-duotone fa-solid fa-scissors"></i> Cut record</button>
+                <button type="button" class="danger" @onclick="OpenDeleteRecordFromContext"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa record</button>
+            }
+        </div>
+    </div>
+}
+
+@if (ShowProfileModal && EditingProfile is not null)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true">
+        <div class="modal-dialog modal-xl modal-dialog-centered ct-sql-modal-dialog ct-sql-profile-modal-dialog">
+            <div class="modal-content border-0 shadow-lg ct-resizable-modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title"><i class="fa-duotone fa-solid fa-plug-circle-bolt"></i> @ProfileModalTitle</h5>
+                        <div class="ct-muted small">CRUD tài khoản trong <code>connect.json</code> bằng modal. Test kết nối có thể chạy trực tiếp từ form.</div>
+                    </div>
+                    <button type="button" class="btn-close" @onclick="CloseProfileModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (ProfileModalMode == "delete")
+                    {
+                        <div class="alert alert-danger d-flex align-items-start gap-2">
+                            <i class="fa-duotone fa-solid fa-triangle-exclamation mt-1"></i>
+                            <div>
+                                <strong>Xóa tài khoản SQL?</strong>
+                                <div>Tài khoản <strong>@EditingProfile.Name</strong> sẽ bị xóa khỏi <code>connect.json</code>. Database thật không bị xóa.</div>
+                            </div>
+                        </div>
+                        <div class="ct-sql-profile-delete-preview">
+                            <span><i class="fa-duotone fa-solid @GetSqlTypeIcon(EditingProfile.TypeConnect)"></i> @NormalizeSqlType(EditingProfile.TypeConnect)</span>
+                            <span><i class="fa-duotone fa-solid fa-network-wired"></i> @BuildEndpoint(EditingProfile)</span>
+                            <span><i class="fa-duotone fa-solid fa-database"></i> @(string.IsNullOrWhiteSpace(EditingProfile.Database) ? "chưa chọn DB" : EditingProfile.Database)</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="ct-sql-profile-modal-grid">
+                            <div class="ct-form-block">
+                                <label class="form-label"><i class="fa-duotone fa-solid fa-signature"></i> Tên cấu hình</label>
+                                <input class="form-control form-control-lg" @bind="EditingProfile.Name" placeholder="VD: Local MySQL, VPS MariaDB..." />
+                            </div>
+                            <div class="ct-form-block">
+                                <label class="form-label"><i class="fa-duotone fa-solid fa-layer-group"></i> Loại SQL</label>
+                                <select class="form-select form-select-lg" @bind="EditingProfile.TypeConnect">
+                                    <option value="mysql">MySQL</option>
+                                    <option value="mariadb">MariaDB</option>
+                                    <option value="sqlserver">SQL Server / MSSQL</option>
+                                </select>
+                            </div>
+                            <div class="ct-form-block">
+                                <label class="form-label"><i class="fa-duotone fa-solid fa-server"></i> Host</label>
+                                <input class="form-control" @bind="EditingProfile.Host" placeholder="127.0.0.1" />
+                            </div>
+                            <div class="ct-form-block">
+                                <label class="form-label"><i class="fa-duotone fa-solid fa-ethernet"></i> Port</label>
+                                <input class="form-control" @bind="EditingProfile.Port" placeholder="3306 / 1433" />
+                            </div>
+                            <div class="ct-form-block">
+                                <label class="form-label"><i class="fa-duotone fa-solid fa-user"></i> User</label>
+                                <input class="form-control" @bind="EditingProfile.User" placeholder="root / sa..." />
+                            </div>
+                            <div class="ct-form-block">
+                                <label class="form-label"><i class="fa-duotone fa-solid fa-key"></i> Password</label>
+                                <input class="form-control" type="password" @bind="EditingProfile.Password" placeholder="Có thể để rỗng nếu Allow no password bật" />
+                            </div>
+                            <div class="ct-form-block">
+                                <label class="form-label"><i class="fa-duotone fa-solid fa-database"></i> Database mặc định</label>
+                                <input class="form-control" @bind="EditingProfile.Database" placeholder="có thể để trống" />
+                            </div>
+                            <div class="ct-form-block">
+                                <label class="form-label"><i class="fa-duotone fa-solid fa-stopwatch"></i> Timeout giây</label>
+                                <input class="form-control" type="number" min="3" max="120" @bind="EditingProfile.TimeoutSeconds" />
+                            </div>
+                            <div class="ct-form-block ct-form-switches ct-profile-switches">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="profileAllowNoPassword" @bind="EditingProfile.AllowNoPassword" />
+                                    <label class="form-check-label" for="profileAllowNoPassword">Cho phép password rỗng</label>
+                                </div>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="profileSqlEncrypt" @bind="EditingProfile.Encrypt" />
+                                    <label class="form-check-label" for="profileSqlEncrypt">Encrypt SQL Server</label>
+                                </div>
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="profileTrustSqlCert" @bind="EditingProfile.TrustServerCertificate" />
+                                    <label class="form-check-label" for="profileTrustSqlCert">Trust certificate</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="ct-sql-profile-live-preview mt-3">
+                            <span><i class="fa-duotone fa-solid @GetSqlTypeIcon(EditingProfile.TypeConnect)"></i> @NormalizeSqlType(EditingProfile.TypeConnect)</span>
+                            <span><i class="fa-duotone fa-solid fa-network-wired"></i> @BuildEndpoint(EditingProfile)</span>
+                            <span><i class="fa-duotone fa-solid fa-database"></i> @(string.IsNullOrWhiteSpace(EditingProfile.Database) ? "chưa chọn DB" : EditingProfile.Database)</span>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer flex-wrap">
+                    <button class="btn btn-outline-secondary" type="button" @onclick="CloseProfileModal">Hủy</button>
+                    @if (ProfileModalMode != "delete")
+                    {
+                        <button class="btn btn-outline-primary" type="button" disabled="@(Busy || EditingProfile is null)" @onclick="TestSelectedProfileAsync"><i class="fa-duotone fa-solid fa-signal-stream"></i> Test từ form</button>
+                        <button class="btn btn-success" type="button" disabled="@(Busy || EditingProfile is null)" @onclick="SaveProfileAsync"><i class="fa-duotone fa-solid fa-floppy-disk"></i> Lưu tài khoản</button>
+                    }
+                    else
+                    {
+                        <button class="btn btn-danger" type="button" disabled="@(Busy || EditingProfile is null)" @onclick="DeleteProfileAsync"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa tài khoản</button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@if (ShowDatabaseModal)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true"><div class="modal-dialog modal-xl modal-dialog-centered ct-sql-modal-dialog"><div class="modal-content border-0 shadow-lg ct-resizable-modal-content"><div class="modal-header"><h5 class="modal-title"><i class="fa-duotone fa-solid fa-database"></i> @DatabaseModalTitle</h5><button type="button" class="btn-close" @onclick="CloseModals"></button></div><div class="modal-body"><div class="ct-sql-block-list"><div class="ct-sql-block"><div class="ct-sql-block-head"><strong>Database block</strong><span class="badge text-bg-light border">@DatabaseModalMode</span></div><div class="ct-sql-connect-form"><div class="ct-form-block"><label class="form-label">Database name</label><input class="form-control" @bind="DatabaseForm.DatabaseName" /></div>@if (DatabaseModalMode == "rename") { <div class="ct-form-block"><label class="form-label">Tên mới</label><input class="form-control" @bind="DatabaseForm.NewDatabaseName" /></div> } @if (DatabaseModalMode == "create") { <div class="ct-form-block"><label class="form-label">Charset</label><input class="form-control" @bind="DatabaseForm.Charset" /></div><div class="ct-form-block"><label class="form-label">Collation</label><input class="form-control" @bind="DatabaseForm.Collation" /></div> }</div>@if (DatabaseModalMode == "drop") { <div class="alert alert-warning mt-3"><i class="fa-duotone fa-solid fa-triangle-exclamation"></i> Thao tác xóa database rất nguy hiểm. Hãy export trước nếu cần.</div> }</div></div></div><div class="modal-footer"><button class="btn btn-outline-secondary" @onclick="CloseModals">Hủy</button><button class="btn btn-primary" disabled="@Busy" @onclick="SaveDatabaseAsync"><i class="fa-duotone fa-solid fa-floppy-disk"></i> Thực hiện</button></div></div></div></div><div class="modal-backdrop fade show"></div>
+}
+
+@if (ShowTableModal)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true"><div class="modal-dialog modal-xl modal-dialog-centered ct-sql-modal-dialog"><div class="modal-content border-0 shadow-lg ct-resizable-modal-content"><div class="modal-header"><h5 class="modal-title"><i class="fa-duotone fa-solid fa-table"></i> @TableModalTitle</h5><button type="button" class="btn-close" @onclick="CloseModals"></button></div><div class="modal-body"><div class="ct-sql-connect-form mb-3"><div class="ct-form-block"><label class="form-label">Tên bảng</label><input class="form-control" @bind="TableForm.TableName" /></div>@if (TableModalMode == "rename") { <div class="ct-form-block"><label class="form-label">Tên mới</label><input class="form-control" @bind="TableForm.NewTableName" /></div> } @if (TableModalMode == "create") { <div class="ct-form-block"><label class="form-label">Engine</label><input class="form-control" @bind="TableForm.Engine" /></div><div class="ct-form-block"><label class="form-label">Charset</label><input class="form-control" @bind="TableForm.Charset" /></div> }</div>@if (TableModalMode == "create") { <div class="ct-pane-head"><strong><i class="fa-duotone fa-solid fa-layer-plus"></i> Cột khởi tạo</strong><button class="btn btn-sm btn-primary" type="button" @onclick="AddTableColumnBlock"><i class="fa-duotone fa-solid fa-plus"></i> Thêm cột</button></div><div class="ct-sql-block-list">@foreach (var col in TableForm.Columns) { <div class="ct-sql-block" @key="col"><div class="ct-sql-block-head"><strong><i class="fa-duotone fa-solid fa-columns-3"></i> @col.Name</strong><button class="btn btn-sm btn-outline-danger" type="button" @onclick="() => RemoveTableColumnBlock(col)"><i class="fa-duotone fa-solid fa-minus"></i></button></div>@RenderColumnForm(col)</div> }</div> } @if (TableModalMode == "drop") { <div class="alert alert-warning"><i class="fa-duotone fa-solid fa-triangle-exclamation"></i> Xóa bảng sẽ xóa cả dữ liệu trong bảng.</div> }</div><div class="modal-footer"><button class="btn btn-outline-secondary" @onclick="CloseModals">Hủy</button><button class="btn btn-primary" disabled="@Busy" @onclick="SaveTableAsync"><i class="fa-duotone fa-solid fa-floppy-disk"></i> Thực hiện</button></div></div></div></div><div class="modal-backdrop fade show"></div>
+}
+
+@if (ShowColumnModal)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true"><div class="modal-dialog modal-xl modal-dialog-centered ct-sql-modal-dialog"><div class="modal-content border-0 shadow-lg ct-resizable-modal-content"><div class="modal-header"><h5 class="modal-title"><i class="fa-duotone fa-solid fa-columns-3"></i> @ColumnModalTitle</h5><button type="button" class="btn-close" @onclick="CloseModals"></button></div><div class="modal-body"><div class="ct-sql-block"><div class="ct-sql-block-head"><strong>Column block</strong><span class="badge text-bg-light border">@ColumnModalMode</span></div>@if (ColumnModalMode == "drop") { <div class="alert alert-warning">Xác nhận xóa cột <strong>@ColumnForm.Name</strong>?</div> } else { @RenderColumnForm(ColumnForm) }</div></div><div class="modal-footer"><button class="btn btn-outline-secondary" @onclick="CloseModals">Hủy</button><button class="btn btn-primary" disabled="@Busy" @onclick="SaveColumnAsync"><i class="fa-duotone fa-solid fa-floppy-disk"></i> Thực hiện</button></div></div></div></div><div class="modal-backdrop fade show"></div>
+}
+
+@if (ShowRecordModal)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true"><div class="modal-dialog modal-xl modal-dialog-centered ct-sql-modal-dialog"><div class="modal-content border-0 shadow-lg ct-resizable-modal-content"><div class="modal-header"><h5 class="modal-title"><i class="fa-duotone fa-solid fa-cube"></i> @RecordModalTitle</h5><button type="button" class="btn-close" @onclick="CloseModals"></button></div><div class="modal-body">@if (RecordModalMode == "delete") { <div class="alert alert-warning"><i class="fa-duotone fa-solid fa-triangle-exclamation"></i> Xóa record này?</div> }<div class="ct-sql-record-editor-grid">@foreach (var column in Columns) { <div class="ct-sql-record-edit-block" @key="column.Name"><label class="form-label"><i class="fa-duotone fa-solid @(column.IsPrimaryKey ? "fa-key" : "fa-input-text")"></i> @column.Name <span class="badge text-bg-light border">@column.DataType</span></label><textarea class="form-control" rows="2" disabled="@(RecordModalMode == "delete")" value="@GetRecordValue(column.Name)" @oninput="args => SetRecordValue(column.Name, args.Value?.ToString())"></textarea><div class="ct-muted small">@(column.IsNullable ? "NULL cho phép" : "NOT NULL") @(column.IsPrimaryKey ? "· Primary key" : "")</div></div> }</div></div><div class="modal-footer"><button class="btn btn-outline-secondary" @onclick="CloseModals">Hủy</button><button class="btn btn-primary" disabled="@Busy" @onclick="SaveRecordAsync"><i class="fa-duotone fa-solid fa-floppy-disk"></i> Thực hiện</button></div></div></div></div><div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    private HubConnection? Hub;
+    private IDisposable? SqlProfilesChangedSubscription;
+    private IDisposable? SqlSoftErrorSubscription;
+    private IDisposable? SqlSchemaChangedSubscription;
+    private List<SqlConnectionProfileDto> Profiles = [];
+    private SqlConnectionProfileDto? SelectedProfile;
+    private SqlConnectionProfileDto? EditingProfile;
+    private string ConnectFilePath = string.Empty;
+    private List<SqlDatabaseDto> Databases = [];
+    private List<SqlTableDto> Tables = [];
+    private List<SqlColumnDto> Columns = [];
+    private List<SqlQueryTemplateDto> QueryTemplates = [];
+    private string? SelectedDatabase;
+    private SqlTableDto? SelectedTable;
+    private string SqlTab = "browser";
+    private string TableSearch = string.Empty;
+    private string RecordSearch = string.Empty;
+    private int RecordPageNumber = 1;
+    private int RecordPageSize = 20;
+    private SqlRowPageDto? RecordPage;
+    private string QueryText = "SELECT 1;";
+    private int QueryMaxRows = 500;
+    private SqlQueryResultDto? QueryResult;
+    private string QueryObjectSearch = string.Empty;
+    private List<Dictionary<string, string?>> QueryEditableOriginalRows = [];
+    private List<Dictionary<string, string?>> QueryEditableRows = [];
+    private Dictionary<string, string?> QueryNewRow = new(StringComparer.OrdinalIgnoreCase);
+    private bool ExportStructure = true;
+    private bool ExportData = true;
+    private int ExportMaxRows = 1000;
+    private string ExportText = string.Empty;
+    private string ImportText = string.Empty;
+    private bool Busy;
+    private string? StatusMessage;
+    private bool StatusIsError;
+    private CancellationTokenSource? SearchDebounce;
+
+    private bool ShowSqlContextMenu;
+    private string SqlContextKind = string.Empty;
+    private string SqlContextTitle = string.Empty;
+    private string SqlContextSubtitle = string.Empty;
+    private string SqlContextIcon = "fa-square-list";
+    private double SqlContextX;
+    private double SqlContextY;
+    private string? ContextDatabaseName;
+    private SqlTableDto? ContextTable;
+    private SqlColumnDto? ContextColumn;
+    private Dictionary<string, string?>? ContextRecord;
+    private SqlTableCrudRequest? ClipboardTable;
+    private SqlColumnEditDto? ClipboardColumn;
+    private Dictionary<string, string?>? ClipboardRecord;
+    private string ClipboardKind = string.Empty;
+    private string SqlContextMenuStyle => $"left:{Math.Clamp(SqlContextX, 8, 1600)}px;top:{Math.Clamp(SqlContextY, 8, 900)}px;";
+
+    private bool ShowProfileModal;
+    private string ProfileModalMode = "create";
+    private string ProfileModalTitle = "Tài khoản SQL";
+    private bool ShowDatabaseModal;
+    private string DatabaseModalMode = "create";
+    private string DatabaseModalTitle = "Database";
+    private SqlDatabaseCrudRequest DatabaseForm = new();
+    private bool ShowTableModal;
+    private string TableModalMode = "create";
+    private string TableModalTitle = "Bảng";
+    private SqlTableCrudRequest TableForm = new();
+    private bool ShowColumnModal;
+    private string ColumnModalMode = "add";
+    private string ColumnModalTitle = "Cột";
+    private SqlColumnEditDto ColumnForm = new();
+    private bool ShowRecordModal;
+    private string RecordModalMode = "insert";
+    private string RecordModalTitle = "Record";
+    private Dictionary<string, string?> RecordOriginal = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, string?> RecordValues = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool IsConnected => Hub?.State == HubConnectionState.Connected;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Busy = true;
+        try
+        {
+            await SignalRHost.EnsureStartedAsync();
+            Hub = new HubConnectionBuilder().WithUrl(SignalRHost.HubUrl).WithAutomaticReconnect().Build();
+            SqlProfilesChangedSubscription = Hub.On<string>("SqlProfilesChanged", async message => await InvokeAsync(async () => { StatusOk(message); await LoadProfilesAsync(true); StateHasChanged(); }));
+            SqlSchemaChangedSubscription = Hub.On<string>("SqlSchemaChanged", async message => await InvokeAsync(async () => { StatusOk(message); await ReloadSelectedSqlAsync(); StateHasChanged(); }));
+            SqlSoftErrorSubscription = Hub.On<string>("SqlSoftError", message => InvokeAsync(() => { Busy = false; StatusError(message); StateHasChanged(); }));
+            await Hub.StartAsync();
+            await LoadProfilesAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task LoadProfilesAsync(bool keepSelection = false)
+    {
+        if (Hub is null) return;
+        var selectedId = keepSelection ? SelectedProfile?.Id : null;
+        var response = await Hub.InvokeAsync<SqlProfilesResponseDto>("GetSqlProfilesAsync");
+        ConnectFilePath = response.ConnectFilePath;
+        Profiles = response.Profiles;
+        SelectedProfile = !string.IsNullOrWhiteSpace(selectedId) ? Profiles.FirstOrDefault(x => x.Id == selectedId) ?? Profiles.FirstOrDefault() : Profiles.FirstOrDefault();
+        EditingProfile = SelectedProfile is null ? null : CloneProfile(SelectedProfile);
+        if (SelectedProfile is not null && !keepSelection) await LoadDatabasesAsync();
+    }
+
+    private void NewProfile()
+    {
+        var profile = new SqlConnectionProfileDto { Id = Guid.NewGuid().ToString("N"), Name = "New MySQL", TypeConnect = "mysql", Host = "127.0.0.1", Port = "3306", User = "root", AllowNoPassword = true, TimeoutSeconds = 15 };
+        SelectedProfile = profile;
+        EditingProfile = profile;
+        ProfileModalMode = "create";
+        ProfileModalTitle = "Thêm tài khoản SQL";
+        ShowProfileModal = true;
+        Databases.Clear(); Tables.Clear(); Columns.Clear(); RecordPage = null;
+    }
+
+    private void OpenEditProfile(SqlConnectionProfileDto profile)
+    {
+        SelectedProfile = profile;
+        EditingProfile = CloneProfile(profile);
+        ProfileModalMode = "edit";
+        ProfileModalTitle = $"Sửa tài khoản: {profile.Name}";
+        ShowProfileModal = true;
+    }
+
+    private void OpenDeleteProfile(SqlConnectionProfileDto profile)
+    {
+        SelectedProfile = profile;
+        EditingProfile = CloneProfile(profile);
+        ProfileModalMode = "delete";
+        ProfileModalTitle = $"Xóa tài khoản: {profile.Name}";
+        ShowProfileModal = true;
+    }
+
+    private void DuplicateProfile(SqlConnectionProfileDto profile)
+    {
+        var clone = CloneProfile(profile);
+        clone.Id = Guid.NewGuid().ToString("N");
+        clone.Name += " Copy";
+        SelectedProfile = clone;
+        EditingProfile = clone;
+        ProfileModalMode = "duplicate";
+        ProfileModalTitle = $"Nhân bản tài khoản: {profile.Name}";
+        ShowProfileModal = true;
+    }
+
+    private async Task OnProfileSelectChangedAsync(ChangeEventArgs args)
+    {
+        var id = args.Value?.ToString();
+        var profile = Profiles.FirstOrDefault(x => x.Id == id);
+        if (profile is not null) await SelectProfileAsync(profile);
+    }
+
+    private async Task SelectProfileAsync(SqlConnectionProfileDto profile)
+    {
+        SelectedProfile = profile;
+        EditingProfile = CloneProfile(profile);
+        SelectedDatabase = profile.Database;
+        Tables.Clear(); Columns.Clear(); RecordPage = null; QueryTemplates.Clear();
+        await LoadDatabasesAsync();
+    }
+
+    private async Task SaveProfileAsync()
+    {
+        if (Hub is null || EditingProfile is null) return;
+        Busy = true;
+        try
+        {
+            var savedId = EditingProfile.Id;
+            SelectedProfile = CloneProfile(EditingProfile);
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("SaveSqlProfileAsync", EditingProfile);
+            if (!result.Success) { StatusError(result.Message); return; }
+
+            StatusOk(result.Message);
+            CloseProfileModal();
+            await LoadProfilesAsync(true);
+            var savedProfile = Profiles.FirstOrDefault(x => string.Equals(x.Id, savedId, StringComparison.OrdinalIgnoreCase));
+            if (savedProfile is not null)
+            {
+                await SelectProfileAsync(savedProfile);
+            }
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task DeleteProfileAsync()
+    {
+        if (Hub is null || EditingProfile is null) return;
+        Busy = true;
+        try
+        {
+            var deletingSelected = string.Equals(SelectedProfile?.Id, EditingProfile.Id, StringComparison.OrdinalIgnoreCase);
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("DeleteSqlProfileAsync", EditingProfile.Id);
+            if (!result.Success)
+            {
+                StatusError(result.Message);
+                return;
+            }
+
+            StatusOk(result.Message);
+            CloseProfileModal();
+            await LoadProfilesAsync(!deletingSelected);
+            if (SelectedProfile is not null)
+            {
+                await SelectProfileAsync(SelectedProfile);
+            }
+            else
+            {
+                Databases.Clear(); Tables.Clear(); Columns.Clear(); RecordPage = null;
+            }
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task TestSelectedProfileAsync()
+    {
+        if (Hub is null || EditingProfile is null) return;
+        Busy = true;
+        try
+        {
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("TestSqlConnectionDraftAsync", EditingProfile);
+            if (result.Success) StatusOk(result.Message); else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task TestProfileAsync(string id)
+    {
+        if (Hub is null) return;
+        Busy = true;
+        try
+        {
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("TestSqlConnectionAsync", id);
+            if (result.Success) StatusOk(result.Message); else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task LoadDatabasesAsync()
+    {
+        if (Hub is null || SelectedProfile is null) return;
+        Busy = true;
+        try
+        {
+            Databases = await Hub.InvokeAsync<List<SqlDatabaseDto>>("GetSqlDatabasesAsync", SelectedProfile.Id);
+            SelectedDatabase = Databases.FirstOrDefault(x => x.Name == SelectedProfile.Database)?.Name ?? SelectedDatabase ?? Databases.FirstOrDefault()?.Name;
+            if (!string.IsNullOrWhiteSpace(SelectedDatabase)) await LoadTablesAsync();
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task SelectDatabaseAsync(string databaseName)
+    {
+        SelectedDatabase = databaseName;
+        Tables.Clear(); Columns.Clear(); SelectedTable = null; RecordPage = null; QueryTemplates.Clear();
+        await LoadTablesAsync();
+    }
+
+    private async Task LoadTablesAsync()
+    {
+        if (Hub is null || SelectedProfile is null || string.IsNullOrWhiteSpace(SelectedDatabase)) return;
+        try
+        {
+            Tables = await Hub.InvokeAsync<List<SqlTableDto>>("GetSqlTablesAsync", SelectedProfile.Id, SelectedDatabase, TableSearch);
+            SelectedTable = Tables.FirstOrDefault(x => SelectedTable is not null && x.FullName == SelectedTable.FullName) ?? Tables.FirstOrDefault();
+            if (SelectedTable is not null) { await LoadColumnsAsync(); await LoadTemplatesAsync(); }
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+    }
+
+    private async Task SelectTableAsync(SqlTableDto table)
+    {
+        SelectedTable = table;
+        RecordPageNumber = 1; RecordPage = null; QueryTemplates.Clear();
+        await LoadColumnsAsync();
+        await LoadTemplatesAsync();
+        if (SqlTab == "records") await LoadRecordsAsync();
+    }
+
+    private async Task LoadColumnsAsync()
+    {
+        if (Hub is null || SelectedProfile is null || SelectedTable is null || string.IsNullOrWhiteSpace(SelectedDatabase)) return;
+        try { Columns = await Hub.InvokeAsync<List<SqlColumnDto>>("GetSqlColumnsAsync", SelectedProfile.Id, SelectedDatabase, SelectedTable.Schema, SelectedTable.Name); }
+        catch (Exception ex) { StatusError(ex.Message); }
+    }
+
+    private async Task LoadRecordsAsync()
+    {
+        if (Hub is null || SelectedProfile is null || SelectedTable is null || string.IsNullOrWhiteSpace(SelectedDatabase)) return;
+        Busy = true;
+        try
+        {
+            var request = new SqlRecordQueryRequest { ProfileId = SelectedProfile.Id, DatabaseName = SelectedDatabase, Schema = SelectedTable.Schema, TableName = SelectedTable.Name, Search = RecordSearch, Page = RecordPageNumber, PageSize = RecordPageSize };
+            RecordPage = await Hub.InvokeAsync<SqlRowPageDto>("QuerySqlRecordsAsync", request);
+            RecordPageNumber = RecordPage.Page;
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task ReloadSelectedSqlAsync()
+    {
+        if (SelectedProfile is null) return;
+        await LoadDatabasesAsync();
+        if (SelectedTable is not null) await LoadRecordsAsync();
+    }
+
+    private async Task LoadTemplatesAsync()
+    {
+        if (Hub is null || SelectedProfile is null || SelectedTable is null || string.IsNullOrWhiteSpace(SelectedDatabase)) return;
+        QueryTemplates = await Hub.InvokeAsync<List<SqlQueryTemplateDto>>("GetSqlQueryTemplatesAsync", SelectedProfile.Id, SelectedDatabase, SelectedTable.Schema, SelectedTable.Name);
+    }
+
+    private void UseTemplate(SqlQueryTemplateDto template) => QueryText = template.QueryText;
+
+    private List<SqlTableDto> GetQueryTables()
+    {
+        if (string.IsNullOrWhiteSpace(QueryObjectSearch)) return Tables.ToList();
+        return Tables
+            .Where(x => (x.FullName?.Contains(QueryObjectSearch, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (x.Name?.Contains(QueryObjectSearch, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (x.Type?.Contains(QueryObjectSearch, StringComparison.OrdinalIgnoreCase) ?? false))
+            .ToList();
+    }
+
+    private List<SqlColumnDto> GetQueryColumns()
+    {
+        if (string.IsNullOrWhiteSpace(QueryObjectSearch)) return Columns.ToList();
+        return Columns
+            .Where(x => (x.Name?.Contains(QueryObjectSearch, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (x.DataType?.Contains(QueryObjectSearch, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (x.IsPrimaryKey && "key primary pk".Contains(QueryObjectSearch, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+    }
+
+    private List<SqlColumnDto> QueryCrudColumns
+    {
+        get
+        {
+            if (QueryResult?.Columns is { Count: > 0 } queryColumns) return queryColumns;
+            if (Columns.Count > 0) return Columns;
+            return [];
+        }
+    }
+
+    private bool CanCrudQueryResult => SelectedProfile is not null
+        && SelectedTable is not null
+        && !string.IsNullOrWhiteSpace(SelectedDatabase)
+        && QueryCrudColumns.Count > 0;
+
+    private async Task SelectTableFromQueryAsync(SqlTableDto table)
+    {
+        await SelectTableAsync(table);
+        SqlTab = "query";
+        QueryResult = null;
+        QueryEditableOriginalRows = [];
+        QueryEditableRows = [];
+        BuildEmptyQueryNewRow();
+    }
+
+    private async Task InsertTableIntoQueryAsync(SqlTableDto table)
+    {
+        if (SelectedTable?.FullName != table.FullName)
+        {
+            await SelectTableFromQueryAsync(table);
+        }
+
+        InsertTokenIntoQuery(FormatTableIdentifier(table));
+    }
+
+    private void InsertSelectedTableIntoQuery()
+    {
+        if (SelectedTable is not null) InsertTokenIntoQuery(FormatTableIdentifier(SelectedTable));
+    }
+
+    private void InsertColumnIntoQuery(SqlColumnDto column) => InsertTokenIntoQuery(QuoteSqlIdentifier(column.Name));
+
+    private void InsertWhereColumnIntoQuery(SqlColumnDto column) => InsertTokenIntoQuery($"WHERE {QuoteSqlIdentifier(column.Name)} = ");
+
+    private void InsertAllColumnsIntoQuery()
+    {
+        if (Columns.Count == 0) return;
+        InsertTokenIntoQuery(string.Join(", ", Columns.Select(c => QuoteSqlIdentifier(c.Name))));
+    }
+
+    private void InsertPrimaryWhereIntoQuery()
+    {
+        var keys = Columns.Where(x => x.IsPrimaryKey).ToList();
+        if (keys.Count == 0) return;
+        InsertTokenIntoQuery("WHERE " + string.Join(" AND ", keys.Select(x => $"{QuoteSqlIdentifier(x.Name)} = ")));
+    }
+
+    private void InsertTokenIntoQuery(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return;
+        QueryText = string.IsNullOrWhiteSpace(QueryText)
+            ? token
+            : QueryText.TrimEnd() + Environment.NewLine + token;
+    }
+
+    private void BuildSelectQuery()
+    {
+        if (SelectedTable is null) return;
+        var columns = Columns.Count == 0 ? "*" : string.Join(", ", Columns.Select(c => QuoteSqlIdentifier(c.Name)));
+        QueryText = $"SELECT {columns}{Environment.NewLine}FROM {FormatTableIdentifier(SelectedTable)}{Environment.NewLine}{BuildDefaultLimitClause()};";
+    }
+
+    private void BuildInsertQuery()
+    {
+        if (SelectedTable is null || Columns.Count == 0) return;
+        var writable = Columns.Where(x => !x.IsPrimaryKey).ToList();
+        if (writable.Count == 0) writable = Columns;
+        QueryText = $"INSERT INTO {FormatTableIdentifier(SelectedTable)} ({string.Join(", ", writable.Select(c => QuoteSqlIdentifier(c.Name)))}){Environment.NewLine}VALUES ({string.Join(", ", writable.Select(c => "@" + c.Name))});";
+    }
+
+    private void BuildUpdateQuery()
+    {
+        if (SelectedTable is null || Columns.Count == 0) return;
+        var keys = Columns.Where(x => x.IsPrimaryKey).ToList();
+        var writable = Columns.Where(x => !x.IsPrimaryKey).ToList();
+        if (writable.Count == 0) writable = Columns;
+        var where = keys.Count > 0
+            ? string.Join(" AND ", keys.Select(k => $"{QuoteSqlIdentifier(k.Name)} = @{k.Name}"))
+            : $"{QuoteSqlIdentifier(Columns[0].Name)} = @{Columns[0].Name}";
+        QueryText = $"UPDATE {FormatTableIdentifier(SelectedTable)}{Environment.NewLine}SET {string.Join(", ", writable.Select(c => $"{QuoteSqlIdentifier(c.Name)} = @{c.Name}"))}{Environment.NewLine}WHERE {where};";
+    }
+
+    private void BuildDeleteQuery()
+    {
+        if (SelectedTable is null || Columns.Count == 0) return;
+        var keys = Columns.Where(x => x.IsPrimaryKey).ToList();
+        var where = keys.Count > 0
+            ? string.Join(" AND ", keys.Select(k => $"{QuoteSqlIdentifier(k.Name)} = @{k.Name}"))
+            : $"{QuoteSqlIdentifier(Columns[0].Name)} = @{Columns[0].Name}";
+        QueryText = $"DELETE FROM {FormatTableIdentifier(SelectedTable)}{Environment.NewLine}WHERE {where};";
+    }
+
+    private void ClearQuery() => QueryText = string.Empty;
+
+    private void OnQueryObjectSearchInput(ChangeEventArgs args)
+    {
+        QueryObjectSearch = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void BuildQueryEditableRowsFromResult()
+    {
+        QueryEditableOriginalRows = [];
+        QueryEditableRows = [];
+        if (QueryResult?.Rows is not { Count: > 0 })
+        {
+            BuildEmptyQueryNewRow();
+            return;
+        }
+
+        foreach (var row in QueryResult.Rows)
+        {
+            QueryEditableOriginalRows.Add(new Dictionary<string, string?>(row, StringComparer.OrdinalIgnoreCase));
+            QueryEditableRows.Add(new Dictionary<string, string?>(row, StringComparer.OrdinalIgnoreCase));
+        }
+
+        BuildEmptyQueryNewRow();
+    }
+
+    private void BuildEmptyQueryNewRow()
+    {
+        QueryNewRow = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var column in QueryCrudColumns)
+        {
+            QueryNewRow[column.Name] = null;
+        }
+    }
+
+    private string? GetQueryCell(int rowIndex, string columnName)
+    {
+        if (rowIndex < 0 || rowIndex >= QueryEditableRows.Count) return null;
+        return QueryEditableRows[rowIndex].TryGetValue(columnName, out var value) ? value : null;
+    }
+
+    private void SetQueryCell(int rowIndex, string columnName, string? value)
+    {
+        if (rowIndex < 0 || rowIndex >= QueryEditableRows.Count) return;
+        QueryEditableRows[rowIndex][columnName] = value;
+    }
+
+    private string? GetQueryNewValue(string columnName) => QueryNewRow.TryGetValue(columnName, out var value) ? value : null;
+
+    private void SetQueryNewValue(string columnName, string? value) => QueryNewRow[columnName] = value;
+
+    private async Task InsertQueryResultRowAsync()
+    {
+        if (Hub is null || SelectedProfile is null || SelectedTable is null || string.IsNullOrWhiteSpace(SelectedDatabase)) return;
+        Busy = true;
+        try
+        {
+            var values = QueryCrudColumns.ToDictionary(c => c.Name, c => QueryNewRow.TryGetValue(c.Name, out var value) ? value : null, StringComparer.OrdinalIgnoreCase);
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("InsertSqlRecordAsync", new SqlRecordWriteRequest
+            {
+                ProfileId = SelectedProfile.Id,
+                DatabaseName = SelectedDatabase,
+                Schema = SelectedTable.Schema,
+                TableName = SelectedTable.Name,
+                Values = values,
+                OriginalValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase),
+                KeyColumns = Columns.Where(x => x.IsPrimaryKey).Select(x => x.Name).ToList()
+            });
+
+            if (result.Success)
+            {
+                StatusOk(result.Message);
+                await RunQueryAsync();
+            }
+            else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task SaveQueryResultRowAsync(int rowIndex)
+    {
+        if (Hub is null || SelectedProfile is null || SelectedTable is null || string.IsNullOrWhiteSpace(SelectedDatabase) || rowIndex < 0 || rowIndex >= QueryEditableRows.Count) return;
+        Busy = true;
+        try
+        {
+            var original = rowIndex < QueryEditableOriginalRows.Count ? QueryEditableOriginalRows[rowIndex] : QueryEditableRows[rowIndex];
+            var values = QueryCrudColumns.ToDictionary(c => c.Name, c => QueryEditableRows[rowIndex].TryGetValue(c.Name, out var value) ? value : null, StringComparer.OrdinalIgnoreCase);
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("UpdateSqlRecordAsync", new SqlRecordWriteRequest
+            {
+                ProfileId = SelectedProfile.Id,
+                DatabaseName = SelectedDatabase,
+                Schema = SelectedTable.Schema,
+                TableName = SelectedTable.Name,
+                OriginalValues = new Dictionary<string, string?>(original, StringComparer.OrdinalIgnoreCase),
+                Values = values,
+                KeyColumns = Columns.Where(x => x.IsPrimaryKey).Select(x => x.Name).ToList()
+            });
+
+            if (result.Success)
+            {
+                StatusOk(result.Message);
+                await RunQueryAsync();
+            }
+            else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task DeleteQueryResultRowAsync(int rowIndex)
+    {
+        if (Hub is null || SelectedProfile is null || SelectedTable is null || string.IsNullOrWhiteSpace(SelectedDatabase) || rowIndex < 0 || rowIndex >= QueryEditableRows.Count) return;
+        Busy = true;
+        try
+        {
+            var original = rowIndex < QueryEditableOriginalRows.Count ? QueryEditableOriginalRows[rowIndex] : QueryEditableRows[rowIndex];
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("DeleteSqlRecordAsync", new SqlRecordDeleteRequest
+            {
+                ProfileId = SelectedProfile.Id,
+                DatabaseName = SelectedDatabase,
+                Schema = SelectedTable.Schema,
+                TableName = SelectedTable.Name,
+                OriginalValues = new Dictionary<string, string?>(original, StringComparer.OrdinalIgnoreCase),
+                KeyColumns = Columns.Where(x => x.IsPrimaryKey).Select(x => x.Name).ToList()
+            });
+
+            if (result.Success)
+            {
+                StatusOk(result.Message);
+                await RunQueryAsync();
+            }
+            else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private RenderFragment RenderQueryCrudRows() => @<div class="table-responsive ct-sql-table-wrap mt-3">
+        <table class="table table-sm table-hover align-middle ct-query-edit-table">
+            <thead>
+                <tr>
+                    @foreach (var column in QueryCrudColumns)
+                    {
+                        <th>@column.Name @if (column.IsPrimaryKey) { <i class="fa-duotone fa-solid fa-key text-warning"></i> }</th>
+                    }
+                    @if (CanCrudQueryResult)
+                    {
+                        <th class="ct-sticky-action-col">Thao tác</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @if (QueryEditableRows.Count > 0 && QueryCrudColumns.Count > 0)
+                {
+                    @for (var i = 0; i < QueryEditableRows.Count; i++)
+                    {
+                        var rowIndex = i;
+                        <tr @key="rowIndex" @oncontextmenu:preventDefault="true" @oncontextmenu="args => OpenRecordContextMenu(args, QueryEditableRows[rowIndex])">
+                            @foreach (var column in QueryCrudColumns)
+                            {
+                                <td>
+                                    @if (CanCrudQueryResult)
+                                    {
+                                        <input class="form-control form-control-sm ct-query-result-input" value="@GetQueryCell(rowIndex, column.Name)" @oninput="args => SetQueryCell(rowIndex, column.Name, args.Value?.ToString())" />
+                                    }
+                                    else
+                                    {
+                                        <code>@GetQueryCell(rowIndex, column.Name)</code>
+                                    }
+                                </td>
+                            }
+                            @if (CanCrudQueryResult)
+                            {
+                                <td class="ct-sticky-action-col">
+                                    <div class="btn-group btn-group-sm">
+                                        <button type="button" class="btn btn-outline-success" disabled="@Busy" @onclick="() => SaveQueryResultRowAsync(rowIndex)"><i class="fa-duotone fa-solid fa-floppy-disk"></i></button>
+                                        <button type="button" class="btn btn-outline-danger" disabled="@Busy" @onclick="() => DeleteQueryResultRowAsync(rowIndex)"><i class="fa-duotone fa-solid fa-trash-can"></i></button>
+                                    </div>
+                                </td>
+                            }
+                        </tr>
+                    }
+                }
+                else
+                {
+                    <tr><td colspan="@(Math.Max(1, QueryCrudColumns.Count + (CanCrudQueryResult ? 1 : 0)))"><div class="ct-empty-inline"><i class="fa-duotone fa-solid fa-inbox"></i> Chưa có dữ liệu.</div></td></tr>
+                }
+            </tbody>
+        </table>
+    </div>;
+
+    private string FormatTableIdentifier(SqlTableDto table)
+    {
+        var isSqlServer = IsSelectedSqlServer();
+        if (isSqlServer && !string.IsNullOrWhiteSpace(table.Schema)) return $"{QuoteSqlIdentifier(table.Schema)}.{QuoteSqlIdentifier(table.Name)}";
+        return QuoteSqlIdentifier(table.Name);
+    }
+
+    private string QuoteSqlIdentifier(string identifier)
+    {
+        if (string.IsNullOrWhiteSpace(identifier)) return identifier;
+        return IsSelectedSqlServer()
+            ? "[" + identifier.Replace("]", "]]", StringComparison.Ordinal) + "]"
+            : "`" + identifier.Replace("`", "``", StringComparison.Ordinal) + "`";
+    }
+
+    private bool IsSelectedSqlServer() => SqlConnectConfigService.NormalizeType(SelectedProfile?.TypeConnect ?? EditingProfile?.TypeConnect) == "sqlserver";
+
+    private string BuildDefaultLimitClause() => IsSelectedSqlServer() ? string.Empty : $"LIMIT {Math.Clamp(QueryMaxRows, 1, 5000)}";
+
+    private async Task RunQueryAsync()
+    {
+        if (Hub is null || SelectedProfile is null) return;
+        Busy = true;
+        try
+        {
+            var request = new SqlQueryRequest { ProfileId = SelectedProfile.Id, DatabaseName = SelectedDatabase ?? EditingProfile?.Database ?? string.Empty, QueryText = QueryText, MaxRows = QueryMaxRows };
+            QueryResult = await Hub.InvokeAsync<SqlQueryResultDto>("ExecuteSqlQueryAsync", request);
+            BuildQueryEditableRowsFromResult();
+            if (QueryResult.Success) StatusOk(QueryResult.Message); else StatusError(QueryResult.Message);
+            if (QueryResult.Success && !LooksLikeSelect(QueryText)) await ReloadSelectedSqlAsync();
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task RunExportAsync()
+    {
+        if (Hub is null || SelectedProfile is null || string.IsNullOrWhiteSpace(SelectedDatabase)) return;
+        Busy = true;
+        try
+        {
+            var result = await Hub.InvokeAsync<SqlQueryResultDto>("ExportSqlScriptAsync", new SqlExportRequest { ProfileId = SelectedProfile.Id, DatabaseName = SelectedDatabase, Schema = SelectedTable?.Schema ?? string.Empty, TableName = SelectedTable?.Name ?? string.Empty, IncludeStructure = ExportStructure, IncludeData = ExportData, MaxRows = ExportMaxRows });
+            if (result.Success)
+            {
+                ExportText = result.Rows.FirstOrDefault()?.Values.FirstOrDefault() ?? string.Empty;
+                StatusOk(result.Message);
+            }
+            else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task RunImportAsync()
+    {
+        if (Hub is null || SelectedProfile is null) return;
+        Busy = true;
+        try
+        {
+            var result = await Hub.InvokeAsync<SqlQueryResultDto>("ImportSqlScriptAsync", new SqlImportRequest { ProfileId = SelectedProfile.Id, DatabaseName = SelectedDatabase ?? EditingProfile?.Database ?? string.Empty, ScriptText = ImportText });
+            if (result.Success) { StatusOk(result.Message); await ReloadSelectedSqlAsync(); } else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private async Task OnTableSearchInputAsync(ChangeEventArgs args) { TableSearch = args.Value?.ToString() ?? string.Empty; await DebounceAsync(LoadTablesAsync); }
+    private async Task OnRecordSearchInputAsync(ChangeEventArgs args) { RecordSearch = args.Value?.ToString() ?? string.Empty; RecordPageNumber = 1; await DebounceAsync(LoadRecordsAsync); }
+    private async Task DebounceAsync(Func<Task> action)
+    {
+        SearchDebounce?.Cancel(); SearchDebounce?.Dispose(); SearchDebounce = new CancellationTokenSource(); var token = SearchDebounce.Token;
+        try { await Task.Delay(300, token); await action(); await InvokeAsync(StateHasChanged); } catch (OperationCanceledException) { }
+    }
+    private async Task OnRecordPageSizeChangedAsync(ChangeEventArgs args) { if (int.TryParse(args.Value?.ToString(), out var size)) { RecordPageSize = size; RecordPageNumber = 1; await LoadRecordsAsync(); } }
+    private async Task ChangeRecordPageAsync(int page) { RecordPageNumber = page; await LoadRecordsAsync(); }
+    private async Task SetSqlTab(string tab) { SqlTab = tab; if (tab == "records" && RecordPage is null) await LoadRecordsAsync(); if (tab == "query" && QueryTemplates.Count == 0) await LoadTemplatesAsync(); }
+
+    private void OpenCreateDatabase() { DatabaseModalMode = "create"; DatabaseModalTitle = "Tạo database"; DatabaseForm = new SqlDatabaseCrudRequest { ProfileId = SelectedProfile?.Id ?? string.Empty, Charset = "utf8mb4", Collation = "utf8mb4_unicode_ci" }; ShowDatabaseModal = true; }
+    private void OpenRenameDatabase() { DatabaseModalMode = "rename"; DatabaseModalTitle = "Sửa / đổi tên database"; DatabaseForm = new SqlDatabaseCrudRequest { ProfileId = SelectedProfile?.Id ?? string.Empty, DatabaseName = SelectedDatabase ?? string.Empty, NewDatabaseName = SelectedDatabase ?? string.Empty }; ShowDatabaseModal = true; }
+    private void OpenDropDatabase() { DatabaseModalMode = "drop"; DatabaseModalTitle = "Xóa database"; DatabaseForm = new SqlDatabaseCrudRequest { ProfileId = SelectedProfile?.Id ?? string.Empty, DatabaseName = SelectedDatabase ?? string.Empty }; ShowDatabaseModal = true; }
+
+    private async Task SaveDatabaseAsync()
+    {
+        if (Hub is null || SelectedProfile is null) return;
+        Busy = true;
+        try
+        {
+            DatabaseForm.ProfileId = SelectedProfile.Id;
+            var method = DatabaseModalMode == "rename" ? "RenameSqlDatabaseAsync" : DatabaseModalMode == "drop" ? "DropSqlDatabaseAsync" : "CreateSqlDatabaseAsync";
+            var result = await Hub.InvokeAsync<SqlActionResultDto>(method, DatabaseForm);
+            if (result.Success) { StatusOk(result.Message); CloseModals(); await LoadDatabasesAsync(); } else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private void OpenCreateTable()
+    {
+        TableModalMode = "create"; TableModalTitle = "Tạo bảng";
+        var nameColumn = CreateDefaultColumn("name");
+        TableForm = new SqlTableCrudRequest
+        {
+            ProfileId = SelectedProfile?.Id ?? string.Empty,
+            DatabaseName = SelectedDatabase ?? string.Empty,
+            Schema = SelectedTable?.Schema ?? string.Empty,
+            TableName = "new_table",
+            Columns =
+            [
+                new SqlColumnEditDto { Name = "id", DataType = "int", IsNullable = false, IsPrimaryKey = true, AutoIncrement = true },
+                nameColumn
+            ]
+        };
+        ShowTableModal = true;
+    }
+    private void OpenRenameTable() { if (SelectedTable is null) return; TableModalMode = "rename"; TableModalTitle = "Sửa / đổi tên bảng"; TableForm = BuildCurrentTableForm(); TableForm.NewTableName = SelectedTable.Name; ShowTableModal = true; }
+    private void OpenDropTable() { if (SelectedTable is null) return; TableModalMode = "drop"; TableModalTitle = "Xóa bảng"; TableForm = BuildCurrentTableForm(); ShowTableModal = true; }
+    private SqlTableCrudRequest BuildCurrentTableForm() => new() { ProfileId = SelectedProfile?.Id ?? string.Empty, DatabaseName = SelectedDatabase ?? string.Empty, Schema = SelectedTable?.Schema ?? string.Empty, TableName = SelectedTable?.Name ?? string.Empty, Columns = Columns.Select(ToEditColumn).ToList() };
+    private void AddTableColumnBlock() => TableForm.Columns.Add(CreateDefaultColumn("new_column"));
+    private void RemoveTableColumnBlock(SqlColumnEditDto column) => TableForm.Columns.Remove(column);
+
+    private SqlColumnEditDto CreateDefaultColumn(string name)
+    {
+        var type = GetDefaultColumnType();
+        var option = FindColumnTypeOption(type);
+        return new SqlColumnEditDto
+        {
+            Name = name,
+            DataType = type,
+            Length = option?.DefaultLength ?? (type.Contains("char", StringComparison.OrdinalIgnoreCase) ? "255" : string.Empty),
+            IsNullable = true
+        };
+    }
+
+    private async Task SaveTableAsync()
+    {
+        if (Hub is null || SelectedProfile is null) return;
+        Busy = true;
+        try
+        {
+            TableForm.ProfileId = SelectedProfile.Id; TableForm.DatabaseName = SelectedDatabase ?? TableForm.DatabaseName;
+            var method = TableModalMode == "rename" ? "RenameSqlTableAsync" : TableModalMode == "drop" ? "DropSqlTableAsync" : "CreateSqlTableAsync";
+            var result = await Hub.InvokeAsync<SqlActionResultDto>(method, TableForm);
+            if (result.Success) { StatusOk(result.Message); CloseModals(); await LoadTablesAsync(); } else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private void OpenAddColumn() { ColumnModalMode = "add"; ColumnModalTitle = "Thêm cột"; ColumnForm = CreateDefaultColumn("new_column"); ShowColumnModal = true; }
+    private void OpenEditColumn(SqlColumnDto col) { ColumnModalMode = "edit"; ColumnModalTitle = "Sửa cột"; ColumnForm = ToEditColumn(col); ShowColumnModal = true; }
+    private void OpenDropColumn(SqlColumnDto col) { ColumnModalMode = "drop"; ColumnModalTitle = "Xóa cột"; ColumnForm = ToEditColumn(col); ShowColumnModal = true; }
+
+    private async Task SaveColumnAsync()
+    {
+        if (Hub is null || SelectedProfile is null || SelectedTable is null || string.IsNullOrWhiteSpace(SelectedDatabase)) return;
+        Busy = true;
+        try
+        {
+            var request = new SqlColumnCrudRequest { ProfileId = SelectedProfile.Id, DatabaseName = SelectedDatabase, Schema = SelectedTable.Schema, TableName = SelectedTable.Name, Column = ColumnForm };
+            var method = ColumnModalMode == "edit" ? "UpdateSqlColumnAsync" : ColumnModalMode == "drop" ? "DropSqlColumnAsync" : "AddSqlColumnAsync";
+            var result = await Hub.InvokeAsync<SqlActionResultDto>(method, request);
+            if (result.Success) { StatusOk(result.Message); CloseModals(); await LoadColumnsAsync(); } else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private void OpenInsertRecord()
+    {
+        RecordModalMode = "insert"; RecordModalTitle = "Thêm record"; RecordOriginal = new(StringComparer.OrdinalIgnoreCase); RecordValues = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var column in Columns) RecordValues[column.Name] = null;
+        ShowRecordModal = true;
+    }
+    private void OpenEditRecord(Dictionary<string, string?> row) { RecordModalMode = "edit"; RecordModalTitle = "Sửa record"; RecordOriginal = new(row, StringComparer.OrdinalIgnoreCase); RecordValues = new(row, StringComparer.OrdinalIgnoreCase); foreach (var column in Columns) RecordValues.TryAdd(column.Name, null); ShowRecordModal = true; }
+    private void OpenDeleteRecord(Dictionary<string, string?> row) { RecordModalMode = "delete"; RecordModalTitle = "Xóa record"; RecordOriginal = new(row, StringComparer.OrdinalIgnoreCase); RecordValues = new(row, StringComparer.OrdinalIgnoreCase); ShowRecordModal = true; }
+    private string? GetRecordValue(string name) => RecordValues.TryGetValue(name, out var value) ? value : null;
+    private void SetRecordValue(string name, string? value) => RecordValues[name] = value;
+
+    private async Task SaveRecordAsync()
+    {
+        if (Hub is null || SelectedProfile is null || SelectedTable is null || string.IsNullOrWhiteSpace(SelectedDatabase)) return;
+        Busy = true;
+        try
+        {
+            var keyColumns = Columns.Where(x => x.IsPrimaryKey).Select(x => x.Name).ToList();
+            SqlActionResultDto result;
+            if (RecordModalMode == "delete")
+            {
+                result = await Hub.InvokeAsync<SqlActionResultDto>("DeleteSqlRecordAsync", new SqlRecordDeleteRequest { ProfileId = SelectedProfile.Id, DatabaseName = SelectedDatabase, Schema = SelectedTable.Schema, TableName = SelectedTable.Name, OriginalValues = RecordOriginal, KeyColumns = keyColumns });
+            }
+            else
+            {
+                var request = new SqlRecordWriteRequest { ProfileId = SelectedProfile.Id, DatabaseName = SelectedDatabase, Schema = SelectedTable.Schema, TableName = SelectedTable.Name, OriginalValues = RecordOriginal, Values = RecordValues, KeyColumns = keyColumns };
+                result = await Hub.InvokeAsync<SqlActionResultDto>(RecordModalMode == "insert" ? "InsertSqlRecordAsync" : "UpdateSqlRecordAsync", request);
+            }
+            if (result.Success) { StatusOk(result.Message); CloseModals(); await LoadRecordsAsync(); } else StatusError(result.Message);
+        }
+        catch (Exception ex) { StatusError(ex.Message); }
+        finally { Busy = false; }
+    }
+
+    private void CloseProfileModal()
+    {
+        ShowProfileModal = false;
+        ProfileModalMode = "create";
+    }
+
+
+    private void OpenDatabaseContextMenu(MouseEventArgs args, string databaseName)
+    {
+        ContextDatabaseName = databaseName;
+        ContextTable = null;
+        ContextColumn = null;
+        ContextRecord = null;
+        SqlContextKind = "database";
+        SqlContextTitle = databaseName;
+        SqlContextSubtitle = "Database · chuột phải";
+        SqlContextIcon = "fa-database";
+        OpenSqlContextMenu(args);
+    }
+
+    private void OpenTableContextMenu(MouseEventArgs args, SqlTableDto table)
+    {
+        ContextDatabaseName = SelectedDatabase;
+        ContextTable = table;
+        ContextColumn = null;
+        ContextRecord = null;
+        SqlContextKind = "table";
+        SqlContextTitle = table.FullName;
+        SqlContextSubtitle = $"{SelectedDatabase} · {table.Type}";
+        SqlContextIcon = "fa-table";
+        OpenSqlContextMenu(args);
+    }
+
+    private void OpenColumnContextMenu(MouseEventArgs args, SqlColumnDto column)
+    {
+        ContextDatabaseName = SelectedDatabase;
+        ContextColumn = column;
+        ContextRecord = null;
+        SqlContextKind = "column";
+        SqlContextTitle = column.Name;
+        SqlContextSubtitle = $"{SelectedTable?.FullName} · {column.DataType}";
+        SqlContextIcon = column.IsPrimaryKey ? "fa-key" : "fa-columns-3";
+        OpenSqlContextMenu(args);
+    }
+
+    private void OpenRecordContextMenu(MouseEventArgs args, Dictionary<string, string?> row)
+    {
+        ContextDatabaseName = SelectedDatabase;
+        ContextRecord = new(row, StringComparer.OrdinalIgnoreCase);
+        SqlContextKind = "record";
+        SqlContextTitle = "Record";
+        SqlContextSubtitle = SelectedTable?.FullName ?? string.Empty;
+        SqlContextIcon = "fa-cube";
+        OpenSqlContextMenu(args);
+    }
+
+    private void OpenSqlContextMenu(MouseEventArgs args)
+    {
+        SqlContextX = args.ClientX;
+        SqlContextY = args.ClientY;
+        ShowSqlContextMenu = true;
+    }
+
+    private void CloseSqlContextMenu() => ShowSqlContextMenu = false;
+
+    private async Task SelectContextDatabaseAsync()
+    {
+        if (!string.IsNullOrWhiteSpace(ContextDatabaseName)) await SelectDatabaseAsync(ContextDatabaseName);
+        CloseSqlContextMenu();
+    }
+
+    private async Task SelectContextTableAsync()
+    {
+        if (ContextTable is not null) await SelectTableAsync(ContextTable);
+        CloseSqlContextMenu();
+    }
+
+    private void InsertContextDatabaseUseQuery()
+    {
+        if (!string.IsNullOrWhiteSpace(ContextDatabaseName)) InsertTokenIntoQuery($"USE {QuoteSqlIdentifier(ContextDatabaseName)};");
+        CloseSqlContextMenu();
+    }
+
+    private void InsertContextDatabaseName()
+    {
+        if (!string.IsNullOrWhiteSpace(ContextDatabaseName)) InsertTokenIntoQuery(QuoteSqlIdentifier(ContextDatabaseName));
+        CloseSqlContextMenu();
+    }
+
+    private void InsertContextTableName()
+    {
+        if (ContextTable is not null) InsertTokenIntoQuery(FormatTableIdentifier(ContextTable));
+        CloseSqlContextMenu();
+    }
+
+    private void InsertContextSelectQuery()
+    {
+        if (ContextTable is not null)
+        {
+            var columns = Columns.Count == 0 ? "*" : string.Join(", ", Columns.Select(c => QuoteSqlIdentifier(c.Name)));
+            QueryText = $"SELECT {columns}{Environment.NewLine}FROM {FormatTableIdentifier(ContextTable)}{Environment.NewLine}{BuildDefaultLimitClause()};";
+            SqlTab = "query";
+        }
+        CloseSqlContextMenu();
+    }
+
+    private void InsertContextColumnName()
+    {
+        if (ContextColumn is not null) InsertTokenIntoQuery(QuoteSqlIdentifier(ContextColumn.Name));
+        CloseSqlContextMenu();
+    }
+
+    private void InsertContextColumnWhere()
+    {
+        if (ContextColumn is not null) InsertTokenIntoQuery($"WHERE {QuoteSqlIdentifier(ContextColumn.Name)} = ");
+        CloseSqlContextMenu();
+    }
+
+    private void InsertContextRecordWhere()
+    {
+        if (ContextRecord is null) return;
+        var keyParts = Columns.Where(x => x.IsPrimaryKey && ContextRecord.ContainsKey(x.Name))
+            .Select(x => $"{QuoteSqlIdentifier(x.Name)} = {FormatSqlLiteral(ContextRecord[x.Name])}")
+            .ToList();
+        if (keyParts.Count == 0)
+        {
+            keyParts = ContextRecord.Take(3).Select(x => $"{QuoteSqlIdentifier(x.Key)} = {FormatSqlLiteral(x.Value)}").ToList();
+        }
+        InsertTokenIntoQuery("WHERE " + string.Join(" AND ", keyParts));
+        CloseSqlContextMenu();
+    }
+
+    private void OpenRenameDatabaseFromContext()
+    {
+        if (!string.IsNullOrWhiteSpace(ContextDatabaseName)) SelectedDatabase = ContextDatabaseName;
+        CloseSqlContextMenu();
+        OpenRenameDatabase();
+    }
+
+    private void OpenDropDatabaseFromContext()
+    {
+        if (!string.IsNullOrWhiteSpace(ContextDatabaseName)) SelectedDatabase = ContextDatabaseName;
+        CloseSqlContextMenu();
+        OpenDropDatabase();
+    }
+
+    private async Task OpenCreateTableFromContext()
+    {
+        if (!string.IsNullOrWhiteSpace(ContextDatabaseName)) await SelectDatabaseAsync(ContextDatabaseName);
+        CloseSqlContextMenu();
+        OpenCreateTable();
+    }
+
+    private async Task ExportContextDatabase()
+    {
+        if (!string.IsNullOrWhiteSpace(ContextDatabaseName)) await SelectDatabaseAsync(ContextDatabaseName);
+        SelectedTable = null;
+        SqlTab = "importexport";
+        CloseSqlContextMenu();
+        await RunExportAsync();
+    }
+
+    private void OpenRenameTableFromContext()
+    {
+        if (ContextTable is not null) SelectedTable = ContextTable;
+        CloseSqlContextMenu();
+        OpenRenameTable();
+    }
+
+    private void OpenDropTableFromContext()
+    {
+        if (ContextTable is not null) SelectedTable = ContextTable;
+        CloseSqlContextMenu();
+        OpenDropTable();
+    }
+
+    private void OpenCreateColumnFromContext()
+    {
+        if (ContextTable is not null) SelectedTable = ContextTable;
+        CloseSqlContextMenu();
+        OpenAddColumn();
+    }
+
+    private void OpenEditColumnFromContext()
+    {
+        if (ContextColumn is not null) OpenEditColumn(ContextColumn);
+        CloseSqlContextMenu();
+    }
+
+    private void OpenDropColumnFromContext()
+    {
+        if (ContextColumn is not null) OpenDropColumn(ContextColumn);
+        CloseSqlContextMenu();
+    }
+
+    private void OpenEditRecordFromContext()
+    {
+        if (ContextRecord is not null) OpenEditRecord(ContextRecord);
+        CloseSqlContextMenu();
+    }
+
+    private void OpenDeleteRecordFromContext()
+    {
+        if (ContextRecord is not null) OpenDeleteRecord(ContextRecord);
+        CloseSqlContextMenu();
+    }
+
+    private void CopyContextBlock()
+    {
+        ClipboardKind = SqlContextKind;
+        ClipboardTable = ContextTable is null ? null : new SqlTableCrudRequest
+        {
+            ProfileId = SelectedProfile?.Id ?? string.Empty,
+            DatabaseName = SelectedDatabase ?? string.Empty,
+            Schema = ContextTable.Schema,
+            TableName = ContextTable.Name,
+            NewTableName = ContextTable.Name + "_copy",
+            Columns = Columns.Select(ToEditColumn).ToList()
+        };
+        ClipboardColumn = ContextColumn is null ? null : ToEditColumn(ContextColumn);
+        ClipboardRecord = ContextRecord is null ? null : new Dictionary<string, string?>(ContextRecord, StringComparer.OrdinalIgnoreCase);
+        StatusOk($"Đã copy {SqlContextTitle} vào clipboard nội bộ.");
+        CloseSqlContextMenu();
+    }
+
+    private void CutContextBlock()
+    {
+        CopyContextBlock();
+        if (SqlContextKind == "table") OpenDropTableFromContext();
+        else if (SqlContextKind == "column") OpenDropColumnFromContext();
+        else if (SqlContextKind == "record") OpenDeleteRecordFromContext();
+    }
+
+    private async Task PasteContextBlockAsync()
+    {
+        CloseSqlContextMenu();
+        if (ClipboardKind == "table" && ClipboardTable is not null)
+        {
+            TableModalMode = "create";
+            TableModalTitle = "Paste / tạo bảng từ clipboard";
+            TableForm = ClipboardTable;
+            TableForm.TableName = string.IsNullOrWhiteSpace(TableForm.NewTableName) ? TableForm.TableName + "_copy" : TableForm.NewTableName;
+            TableForm.DatabaseName = SelectedDatabase ?? TableForm.DatabaseName;
+            ShowTableModal = true;
+            return;
+        }
+        if (ClipboardKind == "column" && ClipboardColumn is not null)
+        {
+            ColumnModalMode = "add";
+            ColumnModalTitle = "Paste / thêm cột từ clipboard";
+            ColumnForm = new SqlColumnEditDto
+            {
+                Name = ClipboardColumn.Name + "_copy",
+                DataType = ClipboardColumn.DataType,
+                Length = ClipboardColumn.Length,
+                IsNullable = ClipboardColumn.IsNullable,
+                IsPrimaryKey = false,
+                AutoIncrement = false,
+                DefaultValue = ClipboardColumn.DefaultValue,
+                Extra = ClipboardColumn.Extra,
+                Comment = ClipboardColumn.Comment
+            };
+            ShowColumnModal = true;
+            return;
+        }
+        if (ClipboardKind == "record" && ClipboardRecord is not null)
+        {
+            RecordModalMode = "insert";
+            RecordModalTitle = "Paste / thêm record từ clipboard";
+            RecordOriginal = new(StringComparer.OrdinalIgnoreCase);
+            RecordValues = new Dictionary<string, string?>(ClipboardRecord, StringComparer.OrdinalIgnoreCase);
+            ShowRecordModal = true;
+            return;
+        }
+        await Task.CompletedTask;
+        StatusError("Clipboard nội bộ chưa có block phù hợp để paste.");
+    }
+
+    private string FormatSqlLiteral(string? value)
+    {
+        if (value is null) return "NULL";
+        if (string.Equals(value, "NULL", StringComparison.OrdinalIgnoreCase)) return "NULL";
+        if (decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal _)) return value;
+        return "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+    }
+
+    private void CloseModals() { ShowProfileModal = false; ShowDatabaseModal = false; ShowTableModal = false; ShowColumnModal = false; ShowRecordModal = false; CloseSqlContextMenu(); }
+
+    private RenderFragment RenderColumnForm(SqlColumnEditDto column) => @<div class="ct-sql-connect-form ct-sql-column-form">
+        <div class="ct-form-block">
+            <label class="form-label"><i class="fa-duotone fa-solid fa-input-text"></i> Tên cột</label>
+            <input class="form-control" @bind="column.Name" placeholder="vd: id, name, created_at" />
+        </div>
+        <div class="ct-form-block ct-type-select-block">
+            <label class="form-label d-flex align-items-center justify-content-between gap-2">
+                <span><i class="fa-duotone fa-solid fa-list-dropdown"></i> Kiểu dữ liệu</span>
+                <span class="badge text-bg-light border"><i class="fa-duotone fa-solid @GetSqlTypeIcon(SelectedProfile?.TypeConnect)"></i> @NormalizeSqlType(SelectedProfile?.TypeConnect)</span>
+            </label>
+            <div class="ct-sql-type-select-wrap">
+                <select class="form-select ct-sql-type-select" value="@column.DataType" @onchange="args => OnColumnDataTypeChanged(column, args.Value?.ToString())">
+                    @if (!HasExactColumnTypeOption(column.DataType))
+                    {
+                        <option value="@column.DataType">@column.DataType · kiểu hiện tại/tùy chỉnh</option>
+                    }
+                    @foreach (var group in GetColumnTypeOptions().GroupBy(x => x.Category))
+                    {
+                        <optgroup label="@group.Key">
+                            @foreach (var item in group)
+                            {
+                                <option value="@item.Value">@item.Label</option>
+                            }
+                        </optgroup>
+                    }
+                </select>
+                <div class="ct-type-chip-row">
+                    @foreach (var item in GetQuickColumnTypeOptions())
+                    {
+                        <button type="button" class="ct-type-chip @(IsColumnType(column, item.Value) ? "active" : null)" title="@item.Hint" @onclick="() => ApplyColumnType(column, item.Value)">@item.Value</button>
+                    }
+                </div>
+            </div>
+            <div class="ct-muted small mt-1">Danh sách kiểu dữ liệu tự đổi theo tài khoản SQL đang chọn. Muốn kiểu khác thì chọn/tạo lại theo đúng loại DB để tránh sinh SQL sai.</div>
+        </div>
+        <div class="ct-form-block">
+            <label class="form-label"><i class="fa-duotone fa-solid fa-ruler-combined"></i> Length / Precision</label>
+            <input class="form-control" value="@column.Length" @oninput="args => column.Length = args.Value?.ToString() ?? string.Empty" placeholder="@GetColumnLengthPlaceholder(column)" disabled="@(!ColumnTypeSupportsLength(column.DataType))" />
+            <div class="ct-muted small mt-1">@GetColumnTypeHint(column.DataType)</div>
+        </div>
+        <div class="ct-form-block">
+            <label class="form-label"><i class="fa-duotone fa-solid fa-code"></i> Default</label>
+            <input class="form-control" @bind="column.DefaultValue" placeholder="NULL, 0, CURRENT_TIMESTAMP, GETDATE()..." />
+        </div>
+        <div class="ct-form-block">
+            <label class="form-label"><i class="fa-duotone fa-solid fa-comment-dots"></i> Comment / mô tả</label>
+            <input class="form-control" @bind="column.Comment" placeholder="ghi chú cột nếu DB hỗ trợ" />
+        </div>
+        <div class="ct-form-block ct-form-switches ct-column-switches">
+            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" @bind="column.IsNullable" /><label class="form-check-label">Nullable</label></div>
+            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" @bind="column.IsPrimaryKey" /><label class="form-check-label">Primary key</label></div>
+            <div class="form-check form-switch"><input class="form-check-input" type="checkbox" checked="@column.AutoIncrement" disabled="@(!ColumnTypeSupportsAutoIncrement(column.DataType))" @onchange="args => OnColumnAutoIncrementChanged(column, args.Value)" /><label class="form-check-label">Auto increment / identity</label></div>
+        </div>
+    </div>;
+
+
+    private sealed class SqlColumnTypeOption
+    {
+        public string Value { get; init; } = string.Empty;
+        public string Label { get; init; } = string.Empty;
+        public string Category { get; init; } = "Khác";
+        public string DefaultLength { get; init; } = string.Empty;
+        public string Hint { get; init; } = string.Empty;
+        public bool SupportsLength { get; init; }
+        public bool SupportsAutoIncrement { get; init; }
+    }
+
+    private IReadOnlyList<SqlColumnTypeOption> GetColumnTypeOptions()
+    {
+        var provider = SqlConnectConfigService.NormalizeType(SelectedProfile?.TypeConnect);
+        return provider switch
+        {
+            "sqlserver" => SqlServerColumnTypes,
+            "mariadb" => MariaDbColumnTypes,
+            _ => MySqlColumnTypes
+        };
+    }
+
+    private IReadOnlyList<SqlColumnTypeOption> GetQuickColumnTypeOptions()
+        => GetColumnTypeOptions().Where(x => x.Value is "int" or "bigint" or "varchar" or "nvarchar" or "text" or "longtext" or "datetime" or "datetime2" or "decimal" or "bit" or "json" or "uniqueidentifier").Take(10).ToList();
+
+    private bool IsKnownColumnType(string? value)
+    {
+        var normalized = NormalizeColumnTypeValue(value);
+        return GetColumnTypeOptions().Any(x => string.Equals(NormalizeColumnTypeValue(x.Value), normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool HasExactColumnTypeOption(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        return GetColumnTypeOptions().Any(x => string.Equals(x.Value, value.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool IsColumnType(SqlColumnEditDto column, string value)
+        => string.Equals(NormalizeColumnTypeValue(column.DataType), NormalizeColumnTypeValue(value), StringComparison.OrdinalIgnoreCase);
+
+    private void ApplyColumnType(SqlColumnEditDto column, string value)
+        => OnColumnDataTypeChanged(column, value);
+
+    private void OnColumnDataTypeChanged(SqlColumnEditDto column, string? value)
+    {
+        column.DataType = string.IsNullOrWhiteSpace(value) ? GetDefaultColumnType() : value.Trim();
+        var option = FindColumnTypeOption(column.DataType);
+        if (option is not null)
+        {
+            column.Length = option.DefaultLength;
+        }
+        else if (!ColumnTypeSupportsLength(column.DataType))
+        {
+            column.Length = string.Empty;
+        }
+
+        if (!ColumnTypeSupportsAutoIncrement(column.DataType))
+        {
+            column.AutoIncrement = false;
+        }
+    }
+
+    private void OnColumnAutoIncrementChanged(SqlColumnEditDto column, object? value)
+    {
+        column.AutoIncrement = ColumnTypeSupportsAutoIncrement(column.DataType) && value is bool checkedValue && checkedValue;
+    }
+
+    private string GetDefaultColumnType()
+        => SqlConnectConfigService.NormalizeType(SelectedProfile?.TypeConnect) == "sqlserver" ? "nvarchar" : "varchar";
+
+    private SqlColumnTypeOption? FindColumnTypeOption(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var trimmed = value.Trim();
+        var options = GetColumnTypeOptions();
+        var exact = options.FirstOrDefault(x => string.Equals(x.Value, trimmed, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null) return exact;
+        var normalized = NormalizeColumnTypeValue(trimmed);
+        return options.FirstOrDefault(x => string.Equals(NormalizeColumnTypeValue(x.Value), normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool ColumnTypeSupportsLength(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        if (value.Contains('(')) return false;
+        var option = FindColumnTypeOption(value);
+        if (option is not null) return option.SupportsLength;
+        var upper = NormalizeColumnTypeValue(value).ToUpperInvariant();
+        return upper.Contains("CHAR", StringComparison.Ordinal) || upper is "DECIMAL" or "NUMERIC" or "VARBINARY" or "BINARY" or "FLOAT" or "DOUBLE";
+    }
+
+    private bool ColumnTypeSupportsAutoIncrement(string? value)
+    {
+        var option = FindColumnTypeOption(value);
+        if (option is not null) return option.SupportsAutoIncrement;
+        var upper = NormalizeColumnTypeValue(value).ToUpperInvariant();
+        return upper is "TINYINT" or "SMALLINT" or "MEDIUMINT" or "INT" or "INTEGER" or "BIGINT";
+    }
+
+    private string GetColumnLengthPlaceholder(SqlColumnEditDto column)
+    {
+        var option = FindColumnTypeOption(column.DataType);
+        if (option is not null && !string.IsNullOrWhiteSpace(option.DefaultLength)) return option.DefaultLength;
+        return ColumnTypeSupportsLength(column.DataType) ? "255 hoặc 10,2" : "không cần length";
+    }
+
+    private string GetColumnTypeHint(string? value)
+    {
+        var option = FindColumnTypeOption(value);
+        if (option is not null && !string.IsNullOrWhiteSpace(option.Hint)) return option.Hint;
+        return ColumnTypeSupportsLength(value) ? "Kiểu này có thể nhập length/precision." : "Kiểu này thường không dùng length.";
+    }
+
+    private static string NormalizeColumnTypeValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var text = value.Trim();
+        var index = text.IndexOf('(');
+        return index >= 0 ? text[..index].Trim() : text;
+    }
+
+    private static SqlColumnTypeOption TypeOption(string value, string label, string category, string defaultLength = "", string hint = "", bool length = false, bool auto = false)
+        => new() { Value = value, Label = label, Category = category, DefaultLength = defaultLength, Hint = hint, SupportsLength = length, SupportsAutoIncrement = auto };
+
+    private static readonly IReadOnlyList<SqlColumnTypeOption> MySqlColumnTypes = new List<SqlColumnTypeOption>
+    {
+        TypeOption("tinyint", "TINYINT · số rất nhỏ", "Số", auto: true),
+        TypeOption("smallint", "SMALLINT · số nhỏ", "Số", auto: true),
+        TypeOption("mediumint", "MEDIUMINT", "Số", auto: true),
+        TypeOption("int", "INT · số nguyên", "Số", auto: true),
+        TypeOption("bigint", "BIGINT · số nguyên lớn", "Số", auto: true),
+        TypeOption("decimal", "DECIMAL · tiền/số chính xác", "Số", "10,2", "Precision,scale. Ví dụ 10,2", length: true),
+        TypeOption("float", "FLOAT", "Số"),
+        TypeOption("double", "DOUBLE", "Số"),
+        TypeOption("bit", "BIT", "Số/boolean"),
+        TypeOption("bool", "BOOL / BOOLEAN", "Số/boolean"),
+        TypeOption("char", "CHAR · text cố định", "Chuỗi", "50", length: true),
+        TypeOption("varchar", "VARCHAR · text ngắn", "Chuỗi", "255", "Độ dài tối đa. Ví dụ 255", length: true),
+        TypeOption("tinytext", "TINYTEXT", "Chuỗi dài"),
+        TypeOption("text", "TEXT", "Chuỗi dài"),
+        TypeOption("mediumtext", "MEDIUMTEXT", "Chuỗi dài"),
+        TypeOption("longtext", "LONGTEXT", "Chuỗi dài"),
+        TypeOption("binary", "BINARY", "Binary", "16", length: true),
+        TypeOption("varbinary", "VARBINARY", "Binary", "255", length: true),
+        TypeOption("blob", "BLOB", "Binary"),
+        TypeOption("longblob", "LONGBLOB", "Binary"),
+        TypeOption("date", "DATE", "Ngày giờ"),
+        TypeOption("time", "TIME", "Ngày giờ"),
+        TypeOption("datetime", "DATETIME", "Ngày giờ"),
+        TypeOption("timestamp", "TIMESTAMP", "Ngày giờ"),
+        TypeOption("year", "YEAR", "Ngày giờ"),
+        TypeOption("json", "JSON", "JSON"),
+        TypeOption("enum", "ENUM(...) · chọn cố định", "Đặc biệt", "'a','b'", "Nhập danh sách giá trị vào ô Length, ví dụ 'draft','published'", length: true),
+        TypeOption("set", "SET(...) · nhiều lựa chọn", "Đặc biệt", "'a','b'", "Nhập danh sách giá trị vào ô Length", length: true)
+    };
+
+    private static readonly IReadOnlyList<SqlColumnTypeOption> MariaDbColumnTypes = MySqlColumnTypes;
+
+    private static readonly IReadOnlyList<SqlColumnTypeOption> SqlServerColumnTypes = new List<SqlColumnTypeOption>
+    {
+        TypeOption("bit", "BIT · boolean", "Số/boolean"),
+        TypeOption("tinyint", "TINYINT", "Số", auto: true),
+        TypeOption("smallint", "SMALLINT", "Số", auto: true),
+        TypeOption("int", "INT", "Số", auto: true),
+        TypeOption("bigint", "BIGINT", "Số", auto: true),
+        TypeOption("decimal", "DECIMAL", "Số", "18,2", "Precision,scale. Ví dụ 18,2", length: true),
+        TypeOption("numeric", "NUMERIC", "Số", "18,2", length: true),
+        TypeOption("money", "MONEY", "Số"),
+        TypeOption("smallmoney", "SMALLMONEY", "Số"),
+        TypeOption("float", "FLOAT", "Số"),
+        TypeOption("real", "REAL", "Số"),
+        TypeOption("char", "CHAR", "Chuỗi", "50", length: true),
+        TypeOption("varchar", "VARCHAR", "Chuỗi", "255", length: true),
+        TypeOption("varchar(max)", "VARCHAR(MAX)", "Chuỗi dài", hint: "Không cần nhập length."),
+        TypeOption("nchar", "NCHAR · unicode cố định", "Unicode", "50", length: true),
+        TypeOption("nvarchar", "NVARCHAR · unicode", "Unicode", "255", length: true),
+        TypeOption("nvarchar(max)", "NVARCHAR(MAX) · unicode dài / JSON text", "Unicode", hint: "Dùng cho text dài hoặc JSON text."),
+        TypeOption("date", "DATE", "Ngày giờ"),
+        TypeOption("time", "TIME", "Ngày giờ", "7", length: true),
+        TypeOption("datetime", "DATETIME", "Ngày giờ"),
+        TypeOption("datetime2", "DATETIME2", "Ngày giờ", "7", length: true),
+        TypeOption("smalldatetime", "SMALLDATETIME", "Ngày giờ"),
+        TypeOption("datetimeoffset", "DATETIMEOFFSET", "Ngày giờ", "7", length: true),
+        TypeOption("uniqueidentifier", "UNIQUEIDENTIFIER · GUID", "Đặc biệt"),
+        TypeOption("binary", "BINARY", "Binary", "16", length: true),
+        TypeOption("varbinary", "VARBINARY", "Binary", "255", length: true),
+        TypeOption("varbinary(max)", "VARBINARY(MAX)", "Binary"),
+        TypeOption("xml", "XML", "Đặc biệt")
+    };
+
+    private RenderFragment RenderSqlRows(List<SqlColumnDto>? columns, List<Dictionary<string, string?>>? rows) => @<div class="table-responsive ct-sql-table-wrap mt-3"><table class="table table-sm table-hover align-middle"><thead><tr>@if (columns is not null){@foreach (var column in columns){<th>@column.Name</th>}}</tr></thead><tbody>@if (rows is not null && rows.Count > 0 && columns is not null){@foreach (var row in rows){<tr>@foreach (var column in columns){<td><code>@(row.TryGetValue(column.Name, out var value) ? value : null)</code></td>}</tr>}}else{<tr><td colspan="@(columns?.Count > 0 ? columns.Count : 1)"><div class="ct-empty-inline"><i class="fa-duotone fa-solid fa-inbox"></i> Chưa có dữ liệu.</div></td></tr>}</tbody></table></div>;
+
+    private static SqlColumnEditDto ToEditColumn(SqlColumnDto col) => new() { OriginalName = col.Name, Name = col.Name, DataType = col.DataType, IsNullable = col.IsNullable, IsPrimaryKey = col.IsPrimaryKey, Ordinal = col.Ordinal };
+    private static string BuildEndpoint(SqlConnectionProfileDto profile) => $"{profile.User}@{profile.Host}:{profile.Port}";
+    private static SqlConnectionProfileDto CloneProfile(SqlConnectionProfileDto profile) => new() { Id = profile.Id, Name = profile.Name, TypeConnect = profile.TypeConnect, Host = profile.Host, Port = profile.Port, User = profile.User, Password = profile.Password, AllowNoPassword = profile.AllowNoPassword, Database = profile.Database, Encrypt = profile.Encrypt, TrustServerCertificate = profile.TrustServerCertificate, TimeoutSeconds = profile.TimeoutSeconds };
+    private static string NormalizeSqlType(string? type) => SqlConnectConfigService.NormalizeType(type) switch { "mariadb" => "MariaDB", "sqlserver" => "SQL Server", _ => "MySQL" };
+    private static string GetSqlTypeIcon(string? type) => SqlConnectConfigService.NormalizeType(type) switch { "sqlserver" => "fa-server", "mariadb" => "fa-dolphin", _ => "fa-database" };
+    private static bool LooksLikeSelect(string sql) { var t = sql.TrimStart(); return t.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase) || t.StartsWith("SHOW", StringComparison.OrdinalIgnoreCase) || t.StartsWith("WITH", StringComparison.OrdinalIgnoreCase); }
+    private void ClearStatus() => StatusMessage = null;
+    private void StatusOk(string message) { StatusIsError = false; StatusMessage = message; }
+    private void StatusError(string message) { StatusIsError = true; StatusMessage = ToFriendlyUiError(message); }
+    private static string ToFriendlyUiError(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return "Thao tác SQL không thành công.";
+        if (message.Contains("Access denied", StringComparison.OrdinalIgnoreCase) || message.Contains("using password: NO", StringComparison.OrdinalIgnoreCase) || message.Contains("using password: YES", StringComparison.OrdinalIgnoreCase)) return "MySQL/MariaDB từ chối đăng nhập. Kiểm tra lại user, password, quyền host và mục Allow no password. Chi tiết: " + message;
+        if (message.Contains("Failed to invoke", StringComparison.OrdinalIgnoreCase)) return "SignalR không gọi được thao tác SQL. App vẫn chạy, hãy kiểm tra cấu hình kết nối rồi thử lại. Chi tiết: " + message;
+        return message;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        SearchDebounce?.Cancel(); SearchDebounce?.Dispose(); SqlProfilesChangedSubscription?.Dispose(); SqlSoftErrorSubscription?.Dispose(); SqlSchemaChangedSubscription?.Dispose();
+        if (Hub is not null) await Hub.DisposeAsync();
+    }
+}
