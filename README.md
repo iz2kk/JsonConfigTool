@@ -1,3 +1,6 @@
+# Chuẩn bị
+SDK .NET 10:  https://dotnet.microsoft.com/en-us/download/dotnet/10.0
+
 # ConfigTool
 
 ConfigTool là ứng dụng **MAUI Blazor Hybrid chạy Windows** dùng để quản trị file cấu hình JSON và quản trị SQL bằng giao diện hiện đại. Mục tiêu chính là hỗ trợ workflow làm game/Unity: Unity có thể đang ghi file config trong lúc chạy, còn ConfigTool vẫn theo dõi realtime, reload/merge an toàn và hạn chế ghi đè dữ liệu mới từ app khác.
