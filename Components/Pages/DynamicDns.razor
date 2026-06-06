@@ -1,0 +1,691 @@
+@page "/dns"
+@implements IAsyncDisposable
+@inject ConfigSignalRHost SignalRHost
+@inject ILocalExplorerService Explorer
+
+<PageTitle>Dynamic DNS</PageTitle>
+
+<div class="ct-page ct-dns-page">
+    <section class="ct-hero card border-0 shadow-sm">
+        <div class="card-body p-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div>
+                    <div class="ct-eyebrow"><i class="fa-duotone fa-solid fa-globe-pointer"></i> Dynamic DNS</div>
+                    <h1 class="ct-title mb-2">No-IP & Dynu updater</h1>
+                    <p class="ct-muted mb-0">Multi tài khoản/domain, log update lưu trong <code>@(Dns?.DynamicFilePath ?? "startup/config/dynamic.json")</code>.</p>
+                </div>
+                <div class="d-flex flex-column align-items-lg-end gap-2">
+                    <div class="ct-status-pill @(IsConnected ? "is-online" : "is-offline")">
+                        <i class="fa-duotone fa-solid @(IsConnected ? "fa-circle-check" : "fa-plug-circle-xmark")"></i>
+                        @(IsConnected ? "SignalR đã kết nối" : "SignalR chưa kết nối")
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(Dns?.DynamicFilePath))" @onclick="OpenDnsConfigFolderAsync">
+                        <i class="fa-duotone fa-solid fa-folder-open"></i> Open config folder DNS
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(StatusMessage))
+    {
+        <div class="alert @(StatusIsError ? "alert-danger" : "alert-success") ct-alert shadow-sm" role="alert">
+            <i class="fa-duotone fa-solid @(StatusIsError ? "fa-triangle-exclamation" : "fa-circle-info")"></i>
+            <span>@StatusMessage</span>
+            <button type="button" class="btn-close ms-auto" aria-label="Close" @onclick="ClearStatus"></button>
+        </div>
+    }
+
+    <section class="card border-0 shadow-sm ct-panel">
+        <div class="card-body p-3 p-lg-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div>
+                    <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-network-wired"></i> IP public thật</h2>
+                    <div class="ct-muted small">Lấy IP public rồi update bulk cho domain đã bật.</div>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-outline-primary" disabled="@Busy" @onclick="GetPublicIpAsync"><i class="fa-duotone fa-solid fa-location-crosshairs"></i> Lấy IP public</button>
+                    <button type="button" class="btn btn-success" disabled="@Busy" @onclick="() => BulkUpdateProviderAsync(ActiveProvider)"><i class="fa-duotone fa-solid fa-cloud-arrow-up"></i> Update bulk tab hiện tại</button>
+                    <button type="button" class="btn btn-outline-secondary" disabled="@Busy" @onclick="ReloadAsync"><i class="fa-duotone fa-solid fa-rotate"></i> Tải lại</button>
+                </div>
+            </div>
+
+            <div class="ct-dns-ip-card mt-3">
+                <div>
+                    <div class="ct-muted small">IP public hiện tại</div>
+                    <strong>@DisplayOr(Dns?.Config.PublicIp.LastIp, "Chưa lấy")</strong>
+                </div>
+                <div>
+                    <div class="ct-muted small">Lần kiểm tra</div>
+                    <strong>@FormatDate(Dns?.Config.PublicIp.CheckedAt)</strong>
+                </div>
+                <div>
+                    <div class="ct-muted small">Nguồn</div>
+                    <strong>@DisplayOr(Dns?.Config.PublicIp.Source, "-")</strong>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="card border-0 shadow-sm ct-panel">
+        <div class="card-body p-3 p-lg-4">
+            <ul class="nav nav-pills ct-sql-tabs mb-3" role="tablist">
+                <li class="nav-item"><button type="button" class="nav-link @(ActiveProvider == "noip" ? "active" : null)" @onclick='() => SetProvider("noip")'><i class="fa-duotone fa-solid fa-cloud"></i> No-IP.org</button></li>
+                <li class="nav-item"><button type="button" class="nav-link @(ActiveProvider == "dynu" ? "active" : null)" @onclick='() => SetProvider("dynu")'><i class="fa-duotone fa-solid fa-globe"></i> Dynu.com</button></li>
+            </ul>
+
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                <div>
+                    <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid @ProviderIcon(ActiveProvider)"></i> @ProviderTitle(ActiveProvider)</h2>
+                    <div class="ct-muted small">Thêm/sửa tài khoản, thêm domain cho từng tài khoản, update lẻ hoặc bulk.</div>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <div class="input-group input-group-sm ct-dns-search-box">
+                        <span class="input-group-text"><i class="fa-duotone fa-solid fa-magnifying-glass"></i></span>
+                        <input class="form-control" placeholder="Tìm tài khoản/domain/log..." value="@SearchText" @oninput="OnSearchInput" />
+                    </div>
+                    <button type="button" class="btn btn-sm btn-primary" @onclick="OpenCreateAccountModal"><i class="fa-duotone fa-solid fa-user-plus"></i> Thêm tài khoản</button>
+                </div>
+            </div>
+
+            <div class="ct-dns-account-grid">
+                @if (GetAccounts().Count == 0)
+                {
+                    <div class="ct-empty-inline"><i class="fa-duotone fa-solid fa-inbox"></i> Chưa có tài khoản @ProviderTitle(ActiveProvider).</div>
+                }
+
+                @foreach (var account in GetAccounts())
+                {
+                    <div class="ct-dns-account-card" @key="account.Id">
+                        <div class="ct-dns-account-head">
+                            <div>
+                                <strong><i class="fa-duotone fa-solid @ProviderIcon(account.Provider)"></i> @account.Name</strong>
+                                <div class="ct-muted small">@account.Username · @account.Domains.Count domain</div>
+                            </div>
+                            <div class="d-flex flex-wrap gap-1">
+                                <span class="badge @(account.Enabled ? "text-bg-success" : "text-bg-secondary")">@(account.Enabled ? "Enabled" : "Disabled")</span>
+                                <span class="badge text-bg-light border">@ProviderTitle(account.Provider)</span>
+                            </div>
+                        </div>
+
+                        <div class="ct-dns-actions">
+                            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenEditAccountModal(account)"><i class="fa-duotone fa-solid fa-pen"></i> Sửa</button>
+                            <button type="button" class="btn btn-sm btn-outline-success" disabled="@Busy" @onclick="() => BulkUpdateAccountAsync(account)"><i class="fa-duotone fa-solid fa-cloud-arrow-up"></i> Update account</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenCreateDomainModal(account)"><i class="fa-duotone fa-solid fa-link"></i> Thêm domain</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => OpenDeleteAccountModal(account)"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa</button>
+                        </div>
+
+                        <div class="ct-dns-domain-list">
+                            @if (account.Domains.Count == 0)
+                            {
+                                <div class="ct-empty-inline small"><i class="fa-duotone fa-solid fa-circle-info"></i> Chưa có domain trong tài khoản này.</div>
+                            }
+                            @foreach (var domain in account.Domains.Where(MatchesSearch))
+                            {
+                                <div class="ct-dns-domain-row" @key="domain.Id">
+                                    <div>
+                                        <strong><i class="fa-duotone fa-solid fa-globe-pointer"></i> @domain.Hostname</strong>
+                                        <div class="ct-muted small">IP: @DisplayOr(domain.LastIp, "-") · @FormatDate(domain.LastUpdatedAt)</div>
+                                        <div class="small @DomainStatusCss(domain)">@domain.LastStatus @domain.LastMessage</div>
+                                    </div>
+                                    <div class="ct-dns-domain-actions">
+                                        <span class="badge @(domain.Enabled ? "text-bg-success" : "text-bg-secondary")">@(domain.Enabled ? "ON" : "OFF")</span>
+                                        <button type="button" class="btn btn-sm btn-outline-success" disabled="@Busy" @onclick="() => UpdateDomainAsync(account, domain)"><i class="fa-duotone fa-solid fa-rotate"></i></button>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenEditDomainModal(account, domain)"><i class="fa-duotone fa-solid fa-pen"></i></button>
+                                        <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => OpenDeleteDomainModal(account, domain)"><i class="fa-duotone fa-solid fa-trash-can"></i></button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </section>
+
+    <section class="card border-0 shadow-sm ct-panel">
+        <div class="card-body p-3 p-lg-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                <div>
+                    <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-list-timeline"></i> Log update</h2>
+                    <div class="ct-muted small">Hiển thị từ dynamic.json, tối đa 500 log mới nhất.</div>
+                </div>
+                <span class="badge text-bg-light border">@(FilteredLogs.Count) log</span>
+            </div>
+            <div class="ct-dns-log-table table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead><tr><th>Thời gian</th><th>Provider</th><th>Tài khoản</th><th>Domain</th><th>IP</th><th>Kết quả</th></tr></thead>
+                    <tbody>
+                    @foreach (var log in FilteredLogs.Take(120))
+                    {
+                        <tr>
+                            <td>@FormatDate(log.UpdatedAt)</td>
+                            <td><span class="badge text-bg-light border">@ProviderTitle(log.Provider)</span></td>
+                            <td>@log.AccountName</td>
+                            <td>@log.Hostname</td>
+                            <td><code>@log.Ip</code></td>
+                            <td><span class="badge @(log.Success ? "text-bg-success" : "text-bg-danger")">@(log.Success ? "OK" : "FAIL")</span> <span class="small">@log.Message</span></td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+</div>
+
+@if (ShowAccountModal)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true">
+        <div class="modal-dialog modal-dialog-centered modal-xl ct-resizable-modal">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fa-duotone fa-solid fa-user-gear"></i> @AccountModalTitle</h5>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseAccountModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (AccountDeleteMode)
+                    {
+                        <div class="alert alert-danger">Xóa tài khoản <strong>@AccountForm.Name</strong> và toàn bộ domain bên trong?</div>
+                    }
+                    else
+                    {
+                        <div class="row g-3">
+                            <div class="col-12 col-lg-4">
+                                <label class="form-label">Provider</label>
+                                <select class="form-select" @bind="AccountForm.Provider">
+                                    <option value="noip">No-IP.org</option>
+                                    <option value="dynu">Dynu.com</option>
+                                </select>
+                            </div>
+                            <div class="col-12 col-lg-4">
+                                <label class="form-label">Tên hiển thị</label>
+                                <input class="form-control" @bind="AccountForm.Name" />
+                            </div>
+                            <div class="col-12 col-lg-4 d-flex align-items-end">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="accountEnabled" @bind="AccountForm.Enabled" />
+                                    <label class="form-check-label" for="accountEnabled">Bật account</label>
+                                </div>
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">Tài khoản / DDNS ID</label>
+                                <input class="form-control" autocomplete="username" @bind="AccountForm.Username" />
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">Mật khẩu / DDNS key</label>
+                                <input class="form-control" type="password" autocomplete="current-password" @bind="AccountForm.Password" />
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label">Ghi chú</label>
+                                <textarea class="form-control" rows="3" @bind="AccountForm.Note"></textarea>
+                            </div>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" @onclick="CloseAccountModal">Hủy</button>
+                    <button type="button" class="btn @(AccountDeleteMode ? "btn-danger" : "btn-primary")" disabled="@Busy" @onclick="SaveAccountModalAsync">
+                        <i class="fa-duotone fa-solid @(AccountDeleteMode ? "fa-trash-can" : "fa-floppy-disk")"></i> @(AccountDeleteMode ? "Xóa" : "Lưu")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@if (ShowDomainModal)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true">
+        <div class="modal-dialog modal-dialog-centered modal-xl ct-resizable-modal">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fa-duotone fa-solid fa-globe-pointer"></i> @DomainModalTitle</h5>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseDomainModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (DomainDeleteMode)
+                    {
+                        <div class="alert alert-danger">Xóa domain <strong>@DomainForm.Hostname</strong> khỏi tài khoản <strong>@(DomainAccount?.Name)</strong>?</div>
+                    }
+                    else
+                    {
+                        <div class="row g-3">
+                            <div class="col-12 col-lg-8">
+                                <label class="form-label">Domain / hostname</label>
+                                <input class="form-control form-control-lg" placeholder="vd: home.example.ddns.net" @bind="DomainForm.Hostname" />
+                            </div>
+                            <div class="col-12 col-lg-4 d-flex align-items-end">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="domainEnabled" @bind="DomainForm.Enabled" />
+                                    <label class="form-check-label" for="domainEnabled">Bật update domain này</label>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <div class="ct-mini-box">
+                                    <div class="fw-semibold mb-1"><i class="fa-duotone fa-solid fa-circle-info"></i> Tài khoản</div>
+                                    <div>@(DomainAccount?.Name) · @ProviderTitle(DomainAccount?.Provider ?? ActiveProvider) · @(DomainAccount?.Username)</div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" @onclick="CloseDomainModal">Hủy</button>
+                    <button type="button" class="btn @(DomainDeleteMode ? "btn-danger" : "btn-primary")" disabled="@Busy" @onclick="SaveDomainModalAsync">
+                        <i class="fa-duotone fa-solid @(DomainDeleteMode ? "fa-trash-can" : "fa-floppy-disk")"></i> @(DomainDeleteMode ? "Xóa" : "Lưu")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    private HubConnection? Hub;
+    private IDisposable? DnsChangedSubscription;
+    private IDisposable? DnsSoftErrorSubscription;
+    private DynamicDnsResponseDto? Dns;
+    private string ActiveProvider = "noip";
+    private string SearchText = string.Empty;
+    private string? StatusMessage;
+    private bool StatusIsError;
+    private bool Busy;
+
+    private bool ShowAccountModal;
+    private bool AccountDeleteMode;
+    private string AccountModalTitle = string.Empty;
+    private DynamicDnsAccountDto AccountForm = new();
+
+    private bool ShowDomainModal;
+    private bool DomainDeleteMode;
+    private string DomainModalTitle = string.Empty;
+    private DynamicDnsAccountDto? DomainAccount;
+    private DynamicDnsDomainDto DomainForm = new();
+
+    private bool IsConnected => Hub?.State == HubConnectionState.Connected;
+
+    private List<DynamicDnsLogDto> FilteredLogs => (Dns?.Config.Logs ?? [])
+        .Where(x => string.Equals(NormalizeProvider(x.Provider), ActiveProvider, StringComparison.OrdinalIgnoreCase))
+        .Where(MatchesSearch)
+        .OrderByDescending(x => x.UpdatedAt)
+        .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await InitializeSignalRAsync();
+        await ReloadAsync();
+    }
+
+    private async Task InitializeSignalRAsync()
+    {
+        Busy = true;
+        try
+        {
+            await SignalRHost.EnsureStartedAsync();
+            Hub = new HubConnectionBuilder()
+                .WithUrl(SignalRHost.HubUrl)
+                .WithAutomaticReconnect()
+                .Build();
+
+            DnsChangedSubscription = Hub.On<DynamicDnsResponseDto, string>("DynamicDnsChanged", (snapshot, message) =>
+                InvokeAsync(() =>
+                {
+                    Dns = snapshot;
+                    StatusOk(message);
+                    StateHasChanged();
+                }));
+
+            DnsSoftErrorSubscription = Hub.On<string>("DynamicDnsSoftError", message =>
+                InvokeAsync(() =>
+                {
+                    StatusError(message);
+                    StateHasChanged();
+                }));
+
+            await Hub.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusError("Không khởi động được SignalR local server: " + ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (Hub is null) return;
+        Busy = true;
+        try
+        {
+            Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+            StatusOk("Đã tải dynamic.json.");
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task GetPublicIpAsync()
+    {
+        if (Hub is null) return;
+        Busy = true;
+        try
+        {
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("GetPublicIpAsync");
+            if (result.Success) StatusOk("IP public: " + result.Message);
+            else StatusError(result.Message);
+            Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task BulkUpdateProviderAsync(string provider)
+    {
+        await UpdateAsync(new DynamicDnsUpdateRequest { Provider = provider, OnlyEnabled = true });
+    }
+
+    private async Task BulkUpdateAccountAsync(DynamicDnsAccountDto account)
+    {
+        await UpdateAsync(new DynamicDnsUpdateRequest { Provider = account.Provider, AccountId = account.Id, OnlyEnabled = true });
+    }
+
+    private async Task UpdateDomainAsync(DynamicDnsAccountDto account, DynamicDnsDomainDto domain)
+    {
+        await UpdateAsync(new DynamicDnsUpdateRequest { Provider = account.Provider, AccountId = account.Id, DomainId = domain.Id, OnlyEnabled = false });
+    }
+
+    private async Task UpdateAsync(DynamicDnsUpdateRequest request)
+    {
+        if (Hub is null) return;
+        Busy = true;
+        try
+        {
+            var result = await Hub.InvokeAsync<DynamicDnsBulkUpdateResultDto>("UpdateDynamicDnsAsync", request);
+            if (result.Snapshot is not null) Dns = result.Snapshot;
+            if (result.Success) StatusOk(result.Message);
+            else StatusError(result.Message);
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private void SetProvider(string provider) => ActiveProvider = NormalizeProvider(provider);
+
+    private List<DynamicDnsAccountDto> GetAccounts() => (Dns?.Config.Accounts ?? [])
+        .Where(x => string.Equals(NormalizeProvider(x.Provider), ActiveProvider, StringComparison.OrdinalIgnoreCase))
+        .Where(MatchesSearch)
+        .OrderBy(x => x.Name)
+        .ToList();
+
+    private bool MatchesSearch(DynamicDnsAccountDto account)
+    {
+        if (string.IsNullOrWhiteSpace(SearchText)) return true;
+        var q = SearchText.Trim();
+        return Contains(account.Name, q)
+            || Contains(account.Username, q)
+            || Contains(account.Note, q)
+            || account.Domains.Any(x => Contains(x.Hostname, q) || Contains(x.LastIp, q) || Contains(x.LastMessage, q));
+    }
+
+    private bool MatchesSearch(DynamicDnsDomainDto domain)
+    {
+        if (string.IsNullOrWhiteSpace(SearchText)) return true;
+        var q = SearchText.Trim();
+        return Contains(domain.Hostname, q) || Contains(domain.LastIp, q) || Contains(domain.LastMessage, q) || Contains(domain.LastStatus, q);
+    }
+
+    private bool MatchesSearch(DynamicDnsLogDto log)
+    {
+        if (string.IsNullOrWhiteSpace(SearchText)) return true;
+        var q = SearchText.Trim();
+        return Contains(log.AccountName, q) || Contains(log.Hostname, q) || Contains(log.Ip, q) || Contains(log.Message, q) || Contains(log.Status, q);
+    }
+
+    private static bool Contains(string? value, string query) => (value ?? string.Empty).Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    private void OpenCreateAccountModal()
+    {
+        AccountDeleteMode = false;
+        AccountModalTitle = "Thêm tài khoản " + ProviderTitle(ActiveProvider);
+        AccountForm = new DynamicDnsAccountDto { Provider = ActiveProvider, Name = ProviderTitle(ActiveProvider) + " account", Enabled = true };
+        ShowAccountModal = true;
+    }
+
+    private void OpenEditAccountModal(DynamicDnsAccountDto account)
+    {
+        AccountDeleteMode = false;
+        AccountModalTitle = "Sửa tài khoản " + account.Name;
+        AccountForm = CloneAccount(account, includeDomains: false);
+        ShowAccountModal = true;
+    }
+
+    private void OpenDeleteAccountModal(DynamicDnsAccountDto account)
+    {
+        AccountDeleteMode = true;
+        AccountModalTitle = "Xóa tài khoản " + account.Name;
+        AccountForm = CloneAccount(account, includeDomains: false);
+        ShowAccountModal = true;
+    }
+
+    private async Task SaveAccountModalAsync()
+    {
+        if (Hub is null) return;
+        Busy = true;
+        try
+        {
+            SqlActionResultDto result;
+            if (AccountDeleteMode)
+            {
+                result = await Hub.InvokeAsync<SqlActionResultDto>("DeleteDynamicDnsAccountAsync", AccountForm.Id);
+            }
+            else
+            {
+                result = await Hub.InvokeAsync<SqlActionResultDto>("SaveDynamicDnsAccountAsync", AccountForm);
+            }
+
+            if (result.Success)
+            {
+                StatusOk(result.Message);
+                CloseAccountModal();
+                Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+            }
+            else
+            {
+                StatusError(result.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private void CloseAccountModal()
+    {
+        ShowAccountModal = false;
+        AccountDeleteMode = false;
+    }
+
+    private void OpenCreateDomainModal(DynamicDnsAccountDto account)
+    {
+        DomainDeleteMode = false;
+        DomainModalTitle = "Thêm domain cho " + account.Name;
+        DomainAccount = account;
+        DomainForm = new DynamicDnsDomainDto { Enabled = true };
+        ShowDomainModal = true;
+    }
+
+    private void OpenEditDomainModal(DynamicDnsAccountDto account, DynamicDnsDomainDto domain)
+    {
+        DomainDeleteMode = false;
+        DomainModalTitle = "Sửa domain " + domain.Hostname;
+        DomainAccount = account;
+        DomainForm = CloneDomain(domain);
+        ShowDomainModal = true;
+    }
+
+    private void OpenDeleteDomainModal(DynamicDnsAccountDto account, DynamicDnsDomainDto domain)
+    {
+        DomainDeleteMode = true;
+        DomainModalTitle = "Xóa domain " + domain.Hostname;
+        DomainAccount = account;
+        DomainForm = CloneDomain(domain);
+        ShowDomainModal = true;
+    }
+
+    private async Task SaveDomainModalAsync()
+    {
+        if (Hub is null || DomainAccount is null) return;
+        Busy = true;
+        try
+        {
+            SqlActionResultDto result;
+            if (DomainDeleteMode)
+            {
+                result = await Hub.InvokeAsync<SqlActionResultDto>("DeleteDynamicDnsDomainAsync", DomainAccount.Id, DomainForm.Id);
+            }
+            else
+            {
+                result = await Hub.InvokeAsync<SqlActionResultDto>("SaveDynamicDnsDomainAsync", new DynamicDnsDomainRequest
+                {
+                    AccountId = DomainAccount.Id,
+                    Domain = DomainForm
+                });
+            }
+
+            if (result.Success)
+            {
+                StatusOk(result.Message);
+                CloseDomainModal();
+                Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+            }
+            else
+            {
+                StatusError(result.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private void CloseDomainModal()
+    {
+        ShowDomainModal = false;
+        DomainDeleteMode = false;
+        DomainAccount = null;
+    }
+
+    private async Task OpenDnsConfigFolderAsync()
+    {
+        var result = await Explorer.OpenFileLocationAsync(Dns?.DynamicFilePath);
+        if (result.Success) StatusOk(result.Message);
+        else StatusError(result.Message);
+    }
+
+    private void OnSearchInput(ChangeEventArgs args)
+    {
+        SearchText = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void StatusOk(string message)
+    {
+        StatusIsError = false;
+        StatusMessage = message;
+    }
+
+    private void StatusError(string message)
+    {
+        StatusIsError = true;
+        StatusMessage = message;
+    }
+
+    private void ClearStatus() => StatusMessage = null;
+
+    private static string NormalizeProvider(string? provider)
+    {
+        provider = (provider ?? string.Empty).Trim().ToLowerInvariant();
+        return provider is "dynu" or "dynu.com" ? "dynu" : "noip";
+    }
+
+    private static string ProviderTitle(string provider) => NormalizeProvider(provider) == "dynu" ? "Dynu.com" : "No-IP.org";
+    private static string ProviderIcon(string provider) => NormalizeProvider(provider) == "dynu" ? "fa-globe" : "fa-cloud";
+    private static string DomainStatusCss(DynamicDnsDomainDto domain)
+        => (domain.LastStatus.Contains("OK", StringComparison.OrdinalIgnoreCase) || domain.LastStatus.Contains("200", StringComparison.OrdinalIgnoreCase) || domain.LastMessage.Contains("good", StringComparison.OrdinalIgnoreCase) || domain.LastMessage.Contains("nochg", StringComparison.OrdinalIgnoreCase))
+            ? "text-success"
+            : "text-muted";
+
+    private static string FormatDate(DateTimeOffset? value) => value is null ? "-" : value.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    private static string FormatDate(DateTimeOffset value) => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    private static string DisplayOr(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+
+    private static DynamicDnsAccountDto CloneAccount(DynamicDnsAccountDto account, bool includeDomains) => new()
+    {
+        Id = account.Id,
+        Provider = NormalizeProvider(account.Provider),
+        Name = account.Name,
+        Username = account.Username,
+        Password = account.Password,
+        Enabled = account.Enabled,
+        Note = account.Note,
+        CreatedAt = account.CreatedAt,
+        UpdatedAt = account.UpdatedAt,
+        Domains = includeDomains ? account.Domains.Select(CloneDomain).ToList() : []
+    };
+
+    private static DynamicDnsDomainDto CloneDomain(DynamicDnsDomainDto domain) => new()
+    {
+        Id = domain.Id,
+        Hostname = domain.Hostname,
+        Enabled = domain.Enabled,
+        LastIp = domain.LastIp,
+        LastStatus = domain.LastStatus,
+        LastMessage = domain.LastMessage,
+        LastUpdatedAt = domain.LastUpdatedAt,
+        UpdateCount = domain.UpdateCount
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        DnsChangedSubscription?.Dispose();
+        DnsSoftErrorSubscription?.Dispose();
+        if (Hub is not null)
+        {
+            await Hub.DisposeAsync();
+        }
+    }
+}
+

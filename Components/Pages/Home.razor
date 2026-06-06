@@ -1,0 +1,2170 @@
+@page "/"
+@implements IAsyncDisposable
+@inject ConfigSignalRHost SignalRHost
+@inject IConfigFolderPicker FolderPicker
+@inject ILocalExplorerService Explorer
+
+<PageTitle>Config Tool</PageTitle>
+
+<div class="ct-page">
+    <section class="ct-hero card border-0 shadow-sm">
+        <div class="card-body p-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div>
+                    <div class="ct-eyebrow"><i class="fa-duotone fa-solid fa-database"></i> Config Tool</div>
+                    <p class="ct-muted mb-0">Config JSON . SQL, MYSQ, MariaSQL</p>
+                </div>
+                <div class="d-flex flex-column align-items-lg-end gap-2">
+                    <div class="ct-status-pill @(IsConnected ? "is-online" : "is-offline")">
+                        <i class="fa-duotone fa-solid @(IsConnected ? "fa-circle-check" : "fa-plug-circle-xmark")"></i>
+                        @(IsConnected ? "SignalR đã kết nối" : "SignalR chưa kết nối")
+                    </div>
+                    @if (LastRealtimeFileChangeAt is not null)
+                    {
+                        <div class="ct-muted small">
+                            <i class="fa-duotone fa-solid fa-radar"></i> Realtime file: @LastRealtimeFileChangeAt.Value.ToLocalTime().ToString("HH:mm:ss")
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(StatusMessage))
+    {
+        <div class="alert @(StatusIsError ? "alert-danger" : "alert-success") ct-alert shadow-sm" role="alert">
+            <i class="fa-duotone fa-solid @(StatusIsError ? "fa-triangle-exclamation" : "fa-circle-info")"></i>
+            <span>@StatusMessage</span>
+            <button type="button" class="btn-close ms-auto" aria-label="Close" @onclick="ClearStatus"></button>
+        </div>
+    }
+
+    <section class="card border-0 shadow-sm ct-panel">
+        <div class="card-body p-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+                <div>
+                    <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-folder-tree"></i> Thư mục config</h2>
+                    <div class="ct-muted small">Cấu hình tự lưu tại: <code>@Bootstrap?.SettingsFilePath</code></div>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-primary ct-btn" type="button" disabled="@Busy" @onclick="PickFolderAsync">
+                        <i class="fa-duotone fa-solid fa-folder-open"></i> Chọn thư mục
+                    </button>
+                    <button class="btn btn-outline-primary ct-btn" type="button" disabled="@(Busy || Bootstrap?.Folder.Exists != true)" @onclick="OpenJsonConfigFolderAsync">
+                        <i class="fa-duotone fa-solid fa-folder-tree"></i> Open folder JSON
+                    </button>
+                    <button class="btn btn-outline-secondary ct-btn" type="button" disabled="@(Busy || SelectedFile is null)" @onclick="OpenSelectedJsonFileAsync">
+                        <i class="fa-duotone fa-solid fa-file-magnifying-glass"></i> Open file location
+                    </button>
+                    <button class="btn btn-success ct-btn" type="button" disabled="@(Busy || Bootstrap?.Folder.Exists != true)" @onclick="OpenNewFileEditor">
+                        <i class="fa-duotone fa-solid fa-file-circle-plus"></i> Tạo JSON mới
+                    </button>
+                    <button class="btn btn-outline-secondary ct-btn" type="button" disabled="@Busy" @onclick="ReloadAllAsync">
+                        <i class="fa-duotone fa-solid fa-rotate"></i> Tải lại
+                    </button>
+                </div>
+            </div>
+
+            <div class="ct-folder-line @(Bootstrap?.Folder.IsValid == true ? "is-valid" : "is-invalid")">
+                <i class="fa-duotone fa-solid @(Bootstrap?.Folder.IsValid == true ? "fa-badge-check" : "fa-circle-exclamation")"></i>
+                <div class="flex-grow-1">
+                    <div class="fw-semibold">@(Bootstrap?.Folder.FolderPath ?? "Chưa chọn thư mục")</div>
+                    <div class="small">@(Bootstrap?.Folder.Message ?? "Chọn thư mục chứa file .json để bắt đầu. Tool sẽ đọc tất cả file JSON trong thư mục, không giới hạn file mẫu.")</div>
+                </div>
+            </div>
+
+            @if (Bootstrap?.Folder.IsValid == false)
+            {
+                <div class="row g-3 mt-1">
+                    <div class="col-12 col-lg-6">
+                        <div class="ct-mini-box">
+                            <div class="fw-semibold mb-2"><i class="fa-duotone fa-solid fa-list-check"></i> File mẫu tham khảo</div>
+                            <div class="d-flex flex-wrap gap-2">
+                                @foreach (var item in Bootstrap.Settings.RequiredFileNames)
+                                {
+                                    <span class="badge text-bg-light border">@item</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-12 col-lg-6">
+                        <div class="ct-mini-box">
+                            <div class="fw-semibold mb-2"><i class="fa-duotone fa-solid fa-magnifying-glass"></i> File đã quét</div>
+                            @if (Bootstrap.Folder.FoundFiles.Count == 0)
+                            {
+                                <span class="ct-muted small">Chưa có file .json hợp lệ trong thư mục này.</span>
+                            }
+                            else
+                            {
+                                <div class="d-flex flex-wrap gap-2">
+                                    @foreach (var item in Bootstrap.Folder.FoundFiles)
+                                    {
+                                        <span class="badge text-bg-light border">@item</span>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+
+    @if (Busy && Bootstrap is null)
+    {
+        <div class="ct-loading card border-0 shadow-sm">
+            <div class="card-body p-5 text-center">
+                <div class="spinner-border" role="status"></div>
+                <div class="mt-3 fw-semibold">Đang khởi động SignalR local server...</div>
+            </div>
+        </div>
+    }
+
+    @if (Bootstrap?.Folder.IsValid == true)
+    {
+        <section class="ct-workspace ct-workspace-top-files">
+            <div class="card border-0 shadow-sm ct-file-panel ct-file-panel-horizontal">
+                <div class="card-body p-3">
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                        <div class="fw-bold"><i class="fa-duotone fa-solid fa-file-code"></i> JSON files trong thư mục</div>
+                        <div class="d-flex flex-wrap align-items-center gap-2">
+                            <span class="badge rounded-pill text-bg-primary">@Files.Count file</span>
+                            <button class="btn btn-sm btn-success" type="button" disabled="@(Busy || Bootstrap?.Folder.Exists != true)" @onclick="OpenNewFileEditor">
+                                <i class="fa-duotone fa-solid fa-file-circle-plus"></i> Tạo JSON mới
+                            </button>
+                        </div>
+                    </div>
+                    <div class="ct-file-strip">
+                        @foreach (var file in Files)
+                        {
+                            <button type="button" class="ct-file-chip @(SelectedFile?.FileName == file.FileName ? "active" : null)" @onclick="() => SelectFileAsync(file)">
+                                <span class="ct-file-chip-title"><i class="fa-duotone fa-solid fa-brackets-curly"></i> @file.FileName</span>
+                                <small>@file.TableCount bảng · @FormatBytes(file.SizeBytes)</small>
+                                <span class="badge rounded-pill @(file.Status == "OK" ? "text-bg-success" : "text-bg-danger")">@file.RootKind</span>
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            <section class="card border-0 shadow-sm ct-data-panel">
+                <div class="card-body p-0">
+                    @if (SelectedFile is null)
+                    {
+                        <div class="ct-empty-state">
+                            <i class="fa-duotone fa-solid fa-hand-pointer"></i>
+                            <h3>Chọn một file JSON bên trên</h3>
+                            <p>Tool sẽ quét các JArray/JObject trong file thành bảng CRUD.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="ct-data-head p-3 p-lg-4 border-bottom">
+                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                                <div>
+                                    <div class="ct-eyebrow"><i class="fa-duotone fa-solid fa-file-lines"></i> @SelectedFile.FileName</div>
+                                    <h2 class="ct-section-title mb-1">Bảng dữ liệu JSON</h2>
+                                    <div class="ct-muted small">@SelectedFile.FullPath</div>
+                                </div>
+                                @if (SelectedTable is not null)
+                                {
+                                    <button class="btn btn-success ct-btn" type="button" disabled="@(Busy || !SelectedTable.CanCreate)" @onclick="OpenCreateEditor">
+                                        <i class="fa-duotone fa-solid fa-plus"></i> @CreateButtonText
+                                    </button>
+                                }
+                            </div>
+
+                            <div class="ct-table-tabs mt-3">
+                                @foreach (var table in Tables)
+                                {
+                                    <button type="button" class="ct-table-tab @(SelectedTable?.Name == table.Name ? "active" : null)" @onclick="() => SelectTableAsync(table)">
+                                        <i class="fa-duotone fa-solid @(table.Kind.Contains("array") ? "fa-table-list" : "fa-object-group")"></i>
+                                        <span>@table.DisplayName</span>
+                                        <small>@table.RowCount</small>
+                                    </button>
+                                }
+                            </div>
+                        </div>
+
+                        @if (SelectedTable is null)
+                        {
+                            <div class="ct-empty-state">
+                                <i class="fa-duotone fa-solid fa-table"></i>
+                                <h3>File này chưa có bảng đọc được</h3>
+                                <p>Hiện tool nhận root object, object con, array object và array value ở cấp đầu tiên.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="ct-toolbar p-3 border-bottom">
+                                <div class="row g-2 align-items-center">
+                                    <div class="col-12 col-xl-6">
+                                        <div class="input-group">
+                                            <span class="input-group-text"><i class="fa-duotone fa-solid fa-magnifying-glass"></i></span>
+                                            <input class="form-control" placeholder="Tìm nhanh trên mọi key/field/value..." value="@SearchText" @oninput="OnSearchInputAsync" />
+                                        </div>
+                                    </div>
+                                    <div class="col-6 col-xl-3">
+                                        <select class="form-select" value="@PageSize" @onchange="OnPageSizeChangedAsync">
+                                            <option value="5">5 dòng/trang</option>
+                                            <option value="10">10 dòng/trang</option>
+                                            <option value="20">20 dòng/trang</option>
+                                            <option value="50">50 dòng/trang</option>
+                                            <option value="100">100 dòng/trang</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-6 col-xl-3 text-end">
+                                        <span class="ct-muted small">Tổng: <strong>@RowsPage?.TotalRows</strong> dòng</span>
+                                    </div>
+                                </div>
+
+                                <div class="ct-query-form mt-3">
+                                    <div class="ct-query-title"><i class="fa-duotone fa-solid fa-filter-list"></i> Query bằng form như database</div>
+                                    <div class="row g-2 align-items-end">
+                                        <div class="col-12 col-lg-3">
+                                            <label class="form-label">Field/key</label>
+                                            <select class="form-select" value="@QueryFieldName" @onchange="OnQueryFieldChangedAsync">
+                                                <option value="*">Tất cả field</option>
+                                                <option value="__key">Row key</option>
+                                                <option value="__rowIndex">Row index</option>
+                                                @foreach (var field in VisibleFields)
+                                                {
+                                                    <option value="@field.Name">@field.Name (@field.Kind)</option>
+                                                }
+                                            </select>
+                                        </div>
+                                        <div class="col-12 col-lg-2">
+                                            <label class="form-label">Điều kiện</label>
+                                            <select class="form-select" value="@QueryOperator" @onchange="OnQueryOperatorChangedAsync">
+                                                <option value="contains">contains</option>
+                                                <option value="equals">equals</option>
+                                                <option value="not-equals">not equals</option>
+                                                <option value="starts-with">starts with</option>
+                                                <option value="ends-with">ends with</option>
+                                                <option value="greater">&gt;</option>
+                                                <option value="less">&lt;</option>
+                                                <option value="empty">empty/null</option>
+                                                <option value="not-empty">not empty</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-12 col-lg-5">
+                                            <label class="form-label">Giá trị query</label>
+                                            <input class="form-control" placeholder="Nhập value để lọc chính xác hơn..." value="@QueryValue" @oninput="OnQueryValueInputAsync" disabled="@IsQueryValueDisabled" />
+                                        </div>
+                                        <div class="col-12 col-lg-2 d-flex gap-2">
+                                            <button class="btn btn-primary flex-grow-1" type="button" disabled="@Busy" @onclick="ApplyQueryAsync">
+                                                <i class="fa-duotone fa-solid fa-magnifying-glass-chart"></i> Query
+                                            </button>
+                                            <button class="btn btn-outline-secondary" type="button" disabled="@Busy" title="Xóa query form" @onclick="ClearQueryAsync">
+                                                <i class="fa-duotone fa-solid fa-broom-wide"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="table-responsive ct-json-table-wrap">
+                                <table class="table table-hover align-middle ct-json-table mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th class="ct-col-actions">#</th>
+                                            @foreach (var field in VisibleFields)
+                                            {
+                                                <th>
+                                                    <span>@field.Name</span>
+                                                    @if (field.IsKey)
+                                                    {
+                                                        <span class="badge text-bg-warning ms-1">key</span>
+                                                    }
+                                                    <small class="d-block text-muted">@field.Kind</small>
+                                                </th>
+                                            }
+                                            <th class="ct-col-actions text-end">Thao tác</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @if (RowsPage?.Rows.Count > 0)
+                                        {
+                                            @foreach (var row in RowsPage.Rows)
+                                            {
+                                                <tr>
+                                                    <td class="ct-row-index">@row.RowIndex</td>
+                                                    @foreach (var field in VisibleFields)
+                                                    {
+                                                        var cell = row.Cells.FirstOrDefault(x => string.Equals(x.Name, field.Name, StringComparison.OrdinalIgnoreCase));
+                                                        <td>
+                                                            <div class="ct-cell-value" title="@(cell?.Value ?? string.Empty)">@ShortValue(cell?.Value)</div>
+                                                        </td>
+                                                    }
+                                                    <td class="text-end ct-actions">
+                                                        <button class="btn btn-sm btn-outline-primary" type="button" @onclick="() => OpenEditEditor(row)">
+                                                            <i class="fa-duotone fa-solid fa-pen-to-square"></i>
+                                                        </button>
+                                                        <button class="btn btn-sm btn-outline-danger" type="button" disabled="@(!SelectedTable.CanDelete)" @onclick="() => OpenDeleteModal(row)">
+                                                            <i class="fa-duotone fa-solid fa-trash-can"></i>
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <tr>
+                                                <td colspan="@(VisibleFields.Count + 2)">
+                                                    <div class="ct-empty-inline">
+                                                        <i class="fa-duotone fa-solid fa-inbox"></i> Không có dòng phù hợp.
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="ct-pagination p-3 border-top d-flex flex-wrap align-items-center justify-content-between gap-2">
+                                <div class="ct-muted small">Trang @RowsPage?.Page / @RowsPage?.TotalPages</div>
+                                <div class="btn-group">
+                                    <button class="btn btn-outline-secondary" type="button" disabled="@(CurrentPage <= 1 || Busy)" @onclick="() => ChangePageAsync(CurrentPage - 1)">
+                                        <i class="fa-duotone fa-solid fa-chevron-left"></i> Trước
+                                    </button>
+                                    <button class="btn btn-outline-secondary" type="button" disabled="@(RowsPage is null || CurrentPage >= RowsPage.TotalPages || Busy)" @onclick="() => ChangePageAsync(CurrentPage + 1)">
+                                        Sau <i class="fa-duotone fa-solid fa-chevron-right"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+            </section>
+        </section>
+    }
+</div>
+
+@if (Editor is not null)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable modal-dialog-centered ct-editor-modal-dialog">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title"><i class="fa-duotone fa-solid @(Editor.IsCreate ? "fa-plus" : "fa-pen-to-square")"></i> @(Editor.IsCreate ? CreateModalTitle : "Sửa dòng JSON")</h5>
+                        <div class="ct-muted small">@SelectedFile?.FileName / @SelectedTable?.DisplayName</div>
+                    </div>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseEditor"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info d-flex gap-2 align-items-start">
+                        <i class="fa-duotone fa-solid fa-lightbulb-on mt-1"></i>
+                        <div>
+                            Form này làm việc như bảng database: nhập/sửa tên key, thêm field mới, đổi kiểu dữ liệu, xóa field. Kiểu <strong>json/object/array</strong> phải nhập JSON hợp lệ.
+                        </div>
+                    </div>
+
+                    <div class="ct-editor-grid">
+                        @for (var fieldIndex = 0; fieldIndex < Editor.Fields.Count; fieldIndex++)
+                        {
+                            var field = Editor.Fields[fieldIndex];
+                            var fieldKind = NormalizeKind(field.Kind);
+                            <div class="ct-editor-field ct-tree-card" @key="field.ClientId">
+                                <div class="ct-editor-field-head">
+                                    <div class="ct-field-badge">
+                                        <i class="fa-duotone fa-solid @GetKindIcon(fieldKind)"></i>
+                                    </div>
+                                    <div class="ct-field-head-text">
+                                        <div class="ct-field-title-line">
+                                            <span class="ct-field-number">Field #@(fieldIndex + 1)</span>
+                                            <strong>@DisplayFieldName(field)</strong>
+                                            @if (field.IsKey)
+                                            {
+                                                <span class="badge text-bg-warning">key</span>
+                                            }
+                                            <span class="ct-kind-chip @GetKindCssClass(fieldKind)">@fieldKind</span>
+                                        </div>
+                                        <div class="ct-muted small">Mỗi field là một block riêng, có thể co giãn và chứa array/object con.</div>
+                                    </div>
+                                    <button class="btn btn-outline-secondary ct-icon-btn" type="button" title="Thu gọn / mở rộng field" @onclick="() => ToggleEditorFieldCollapsed(field)">
+                                        <i class="fa-duotone fa-solid @(field.IsCollapsed ? "fa-up-right-and-down-left-from-center" : "fa-down-left-and-up-right-to-center")"></i>
+                                    </button>
+                                    <button class="btn btn-outline-danger ct-icon-btn" type="button" title="Xóa field" @onclick="() => RemoveEditorField(field)">
+                                        <i class="fa-duotone fa-solid fa-xmark"></i>
+                                    </button>
+                                </div>
+
+                                @if (!field.IsCollapsed)
+                                {
+                                <div class="ct-editor-field-body">
+                                    <div class="ct-field-control-grid">
+                                        <div class="ct-form-block">
+                                            <label class="form-label"><i class="fa-duotone fa-solid fa-tag"></i> Tên field/key</label>
+                                            <input class="form-control" list="ct-editor-key-suggestions" @bind="field.Name" placeholder="vd: id, name, tilePath..." />
+                                            <datalist id="ct-editor-key-suggestions">
+                                                @foreach (var key in KeySuggestions)
+                                                {
+                                                    <option value="@key"></option>
+                                                }
+                                            </datalist>
+                                        </div>
+                                        <div class="ct-form-block">
+                                            <label class="form-label"><i class="fa-duotone fa-solid fa-code-branch"></i> Kiểu dữ liệu</label>
+                                            <select class="form-select" value="@field.Kind" @onchange="args => ChangeEditorFieldKind(field, args)">
+                                                <option value="string">string</option>
+                                                <option value="number">number</option>
+                                                <option value="bool">bool</option>
+                                                <option value="json">json</option>
+                                                <option value="object">object</option>
+                                                <option value="array">array</option>
+                                                <option value="null">null</option>
+                                            </select>
+                                        </div>
+                                        <div class="ct-form-block ct-form-block-value">
+                                            <label class="form-label"><i class="fa-duotone fa-solid fa-pen-field"></i> Giá trị</label>
+                                            @if (fieldKind is "array" or "object" or "json")
+                                            {
+                                                var rootNode = EnsureTreeRoot(field);
+                                                var lockRootKind = fieldKind is "array" or "object";
+                                                <div class="ct-tree-value-editor">
+                                                    <div class="ct-tree-value-toolbar">
+                                                        <div>
+                                                            <div class="fw-semibold"><i class="fa-duotone fa-solid fa-diagram-project"></i> Block editor nhập trực tiếp</div>
+                                                            <div class="ct-muted small">Object/array không còn chỉ preview: key, item, block cha/con đều nhập và cập nhật được.</div>
+                                                        </div>
+                                                        <span class="badge text-bg-light border"><i class="fa-duotone fa-solid @GetKindIcon(rootNode.Kind)"></i> @NormalizeKind(rootNode.Kind)</span>
+                                                    </div>
+
+                                                    <JsonTreeFieldEditor Node="@rootNode" IsRoot="true" HideRootKey="true" LockKind="@lockRootKind" KeySuggestions="@KeySuggestions" OnChanged="TreeEditorChanged" />
+
+                                                    <details class="ct-json-raw-sync mt-2">
+                                                        <summary><i class="fa-duotone fa-solid fa-code"></i> JSON raw đồng bộ từ block</summary>
+                                                        <textarea class="form-control ct-json-textarea mt-2" rows="5" value="@BuildTreeJsonSafe(field)" @onchange="args => ReplaceTreeRootFromRaw(field, args.Value?.ToString())"></textarea>
+                                                        <div class="ct-muted small mt-1">Sửa JSON raw ở đây sẽ dựng lại block cha/con ở trên.</div>
+                                                    </details>
+                                                </div>
+                                            }
+                                            else if (fieldKind == "bool")
+                                            {
+                                                <select class="form-select" @bind="field.Value">
+                                                    <option value="true">true</option>
+                                                    <option value="false">false</option>
+                                                </select>
+                                            }
+                                            else if (fieldKind == "null")
+                                            {
+                                                <input class="form-control" value="null" disabled />
+                                            }
+                                            else
+                                            {
+                                                <input class="form-control" @bind="field.Value" placeholder="Nhập giá trị..." />
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <button class="btn btn-outline-primary mt-3" type="button" @onclick="AddEditorField">
+                        <i class="fa-duotone fa-solid fa-plus"></i> Thêm field
+                    </button>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" @onclick="CloseEditor">Hủy</button>
+                    <button type="button" class="btn btn-primary" disabled="@Busy" @onclick="SaveEditorAsync">
+                        <i class="fa-duotone fa-solid fa-floppy-disk"></i> Lưu JSON
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+
+@if (NewFileEditor is not null)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable modal-dialog-centered ct-editor-modal-dialog ct-new-file-modal-dialog">
+            <div class="modal-content border-0 shadow-lg ct-resizable-modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title"><i class="fa-duotone fa-solid fa-file-circle-plus"></i> Tạo file JSON mới</h5>
+                        <div class="ct-muted small">Tạo custom config trong thư mục đang chọn, dựng block key/object/array ngay từ form.</div>
+                    </div>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseNewFileEditor"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3 mb-3">
+                        <div class="col-12 col-lg-5">
+                            <label class="form-label fw-bold"><i class="fa-duotone fa-solid fa-file-signature"></i> Tên file</label>
+                            <div class="input-group">
+                                <input class="form-control" @bind="NewFileEditor.FileName" placeholder="vd: EnemyConfig.json" />
+                                <span class="input-group-text">.json</span>
+                            </div>
+                        </div>
+                        <div class="col-12 col-lg-3">
+                            <label class="form-label fw-bold"><i class="fa-duotone fa-solid fa-code-branch"></i> Root type</label>
+                            <select class="form-select" value="@NewFileEditor.Root.Kind" @onchange="ChangeNewFileRootKind">
+                                <option value="object">object</option>
+                                <option value="array">array</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-lg-4 d-flex align-items-end">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" role="switch" id="overwriteJsonFile" @bind="NewFileEditor.OverwriteIfExists" />
+                                <label class="form-check-label" for="overwriteJsonFile">Cho phép ghi đè nếu file đã tồn tại</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="ct-tree-value-editor">
+                        <div class="ct-tree-value-toolbar">
+                            <div>
+                                <div class="fw-semibold"><i class="fa-duotone fa-solid fa-diagram-project"></i> Root block của file mới</div>
+                                <div class="ct-muted small">Có thể thêm key, tạo array, import JSON hoặc nhập item dạng dấu phẩy.</div>
+                            </div>
+                            <span class="badge text-bg-light border"><i class="fa-duotone fa-solid @GetKindIcon(NewFileEditor.Root.Kind)"></i> @NormalizeKind(NewFileEditor.Root.Kind)</span>
+                        </div>
+                        <JsonTreeFieldEditor Node="@NewFileEditor.Root" IsRoot="true" HideRootKey="true" LockKind="@true" KeySuggestions="@KeySuggestions" OnChanged="TreeEditorChanged" />
+                    </div>
+
+                    <details class="ct-json-raw-sync mt-3">
+                        <summary><i class="fa-duotone fa-solid fa-code"></i> Xem/sửa raw JSON trước khi tạo file</summary>
+                        <textarea class="form-control ct-json-textarea mt-2" rows="8" value="@BuildNewFileJsonSafe()" @onchange="args => ReplaceNewFileRootFromRaw(args.Value?.ToString())"></textarea>
+                    </details>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" @onclick="CloseNewFileEditor">Hủy</button>
+                    <button type="button" class="btn btn-success" disabled="@Busy" @onclick="SaveNewFileAsync">
+                        <i class="fa-duotone fa-solid fa-floppy-disk"></i> Tạo file JSON
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@if (DeleteTarget is not null)
+{
+    <div class="modal fade show ct-modal" tabindex="-1" style="display:block;" role="dialog" aria-modal="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow-lg">
+                <div class="modal-header">
+                    <h5 class="modal-title text-danger"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa dòng JSON?</h5>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseDeleteModal"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="mb-2">Dòng <strong>#@DeleteTarget.RowIndex</strong> / key <strong>@DeleteTarget.RowKey</strong> sẽ bị xóa khỏi file <code>@SelectedFile?.FileName</code>.</p>
+                    <div class="ct-muted small">Hành động này ghi trực tiếp vào file JSON trong thư mục config đã chọn.</div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-light" type="button" @onclick="CloseDeleteModal">Hủy</button>
+                    <button class="btn btn-danger" type="button" disabled="@Busy" @onclick="DeleteRowAsync">
+                        <i class="fa-duotone fa-solid fa-trash-can"></i> Xóa
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    private HubConnection? Hub;
+    private IDisposable? ChangedSubscription;
+    private IDisposable? FilesChangedSubscription;
+    private DateTimeOffset? LastRealtimeFileChangeAt;
+    private ConfigBootstrapDto? Bootstrap;
+    private List<JsonConfigFileDto> Files = [];
+    private List<JsonTableDto> Tables = [];
+    private JsonConfigFileDto? SelectedFile;
+    private JsonTableDto? SelectedTable;
+    private JsonRowPageDto? RowsPage;
+    private RowEditorState? Editor;
+    private NewJsonFileEditorState? NewFileEditor;
+    private JsonRowDto? DeleteTarget;
+    private string SearchText = string.Empty;
+    private string QueryFieldName = "*";
+    private string QueryOperator = "contains";
+    private string QueryValue = string.Empty;
+    private string? StatusMessage;
+    private bool StatusIsError;
+    private bool Busy;
+    private int CurrentPage = 1;
+    private int PageSize = 10;
+    private CancellationTokenSource? SearchDebounce;
+    private List<string> KeySuggestions = [];
+
+    private bool IsConnected => Hub?.State == HubConnectionState.Connected;
+    private bool IsObjectTable => string.Equals(SelectedTable?.Kind, "object", StringComparison.OrdinalIgnoreCase)
+                                  || string.Equals(SelectedTable?.Kind, "root-object", StringComparison.OrdinalIgnoreCase);
+    private bool IsQueryValueDisabled => QueryOperator is "empty" or "not-empty";
+    private string CreateButtonText => IsObjectTable ? "Thêm field/key" : "Thêm dòng";
+    private string CreateModalTitle => IsObjectTable ? "Thêm field/key JSON" : "Thêm dòng JSON";
+
+    private List<JsonFieldDto> VisibleFields => RowsPage?.Fields.Count > 0
+        ? RowsPage.Fields
+        : SelectedTable?.Fields ?? [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await InitializeSignalRAsync();
+        await ReloadAllAsync();
+    }
+
+    private async Task InitializeSignalRAsync()
+    {
+        Busy = true;
+        try
+        {
+            await SignalRHost.EnsureStartedAsync();
+            Hub = new HubConnectionBuilder()
+                .WithUrl(SignalRHost.HubUrl)
+                .WithAutomaticReconnect()
+                .Build();
+
+            ChangedSubscription = Hub.On<string, string, string>("ConfigChanged", (fileName, tableName, message) =>
+                InvokeAsync(async () =>
+                {
+                    if (SelectedFile?.FileName == fileName && SelectedTable?.Name == tableName)
+                    {
+                        StatusOk(message);
+                        await LoadRowsAsync();
+                    }
+                }));
+
+            FilesChangedSubscription = Hub.On<ConfigExternalChangeDto>("ConfigFilesChanged", change =>
+                InvokeAsync(async () =>
+                {
+                    await ApplyRealtimeFilesChangeAsync(change);
+                }));
+
+            await Hub.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusError("Không khởi động được SignalR local server: " + ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task ReloadAllAsync()
+    {
+        if (Hub is null)
+        {
+            return;
+        }
+
+        Busy = true;
+        try
+        {
+            Bootstrap = await Hub.InvokeAsync<ConfigBootstrapDto>("BootstrapAsync");
+            Files = Bootstrap.Files;
+            if (Files.Count > 0)
+            {
+                SelectedFile = Files.FirstOrDefault(x => SelectedFile?.FileName == x.FileName) ?? Files.First();
+                await LoadTablesAsync();
+            }
+            else
+            {
+                SelectedFile = null;
+                SelectedTable = null;
+                Tables.Clear();
+                RowsPage = null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(Bootstrap.Message))
+            {
+                StatusIsError = !Bootstrap.Folder.IsValid;
+                StatusMessage = Bootstrap.Message;
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task PickFolderAsync()
+    {
+        if (Hub is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var folder = await FolderPicker.PickFolderAsync();
+            if (string.IsNullOrWhiteSpace(folder))
+            {
+                return;
+            }
+
+            Busy = true;
+            Bootstrap = await Hub.InvokeAsync<ConfigBootstrapDto>("SetConfigFolderAsync", folder);
+            Files = Bootstrap.Files;
+            SelectedFile = Files.FirstOrDefault();
+            SelectedTable = null;
+            Tables.Clear();
+            RowsPage = null;
+
+            if (Bootstrap.Folder.IsValid && SelectedFile is not null)
+            {
+                await LoadTablesAsync();
+                StatusOk(Bootstrap.Message);
+            }
+            else
+            {
+                StatusError(Bootstrap.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+
+    private async Task OpenJsonConfigFolderAsync()
+    {
+        var result = await Explorer.OpenFolderAsync(Bootstrap?.Folder.FolderPath);
+        if (result.Success) StatusOk(result.Message);
+        else StatusError(result.Message);
+    }
+
+    private async Task OpenSelectedJsonFileAsync()
+    {
+        var result = await Explorer.OpenFileLocationAsync(SelectedFile?.FullPath);
+        if (result.Success) StatusOk(result.Message);
+        else StatusError(result.Message);
+    }
+
+    private async Task SelectFileAsync(JsonConfigFileDto file)
+    {
+        if (SelectedFile?.FileName == file.FileName)
+        {
+            return;
+        }
+
+        SelectedFile = file;
+        SelectedTable = null;
+        RowsPage = null;
+        SearchText = string.Empty;
+        ClearQueryState();
+        CurrentPage = 1;
+        await LoadTablesAsync();
+    }
+
+    private async Task LoadTablesAsync()
+    {
+        if (Hub is null || SelectedFile is null)
+        {
+            return;
+        }
+
+        Busy = true;
+        try
+        {
+            Tables = await Hub.InvokeAsync<List<JsonTableDto>>("GetTablesAsync", SelectedFile.FileName);
+            await RefreshKeySuggestionsAsync();
+            SelectedTable = Tables.FirstOrDefault(x => SelectedTable?.Name == x.Name) ?? Tables.FirstOrDefault();
+            CurrentPage = 1;
+            await LoadRowsAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task SelectTableAsync(JsonTableDto table)
+    {
+        SelectedTable = table;
+        SearchText = string.Empty;
+        ClearQueryState();
+        CurrentPage = 1;
+        await LoadRowsAsync();
+    }
+
+
+    private async Task RefreshKeySuggestionsAsync(string? keyword = null)
+    {
+        if (Hub is null)
+        {
+            KeySuggestions = [];
+            return;
+        }
+
+        try
+        {
+            KeySuggestions = await Hub.InvokeAsync<List<string>>("SearchKeysAsync", SelectedFile?.FileName, keyword, 300);
+        }
+        catch
+        {
+            KeySuggestions = VisibleFields.Select(x => x.Name).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+        }
+    }
+
+    private async Task LoadRowsAsync()
+    {
+        if (Hub is null || SelectedFile is null || SelectedTable is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var query = new JsonRowsQueryRequest
+            {
+                FileName = SelectedFile.FileName,
+                TableName = SelectedTable.Name,
+                Search = SearchText,
+                Page = CurrentPage,
+                PageSize = PageSize,
+                Filters = BuildQueryFilters()
+            };
+            RowsPage = await Hub.InvokeAsync<JsonRowPageDto>("QueryRowsByFormAsync", query);
+            CurrentPage = RowsPage.Page;
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+    }
+
+    private async Task OnSearchInputAsync(ChangeEventArgs args)
+    {
+        SearchText = args.Value?.ToString() ?? string.Empty;
+        CurrentPage = 1;
+        SearchDebounce?.Cancel();
+        SearchDebounce?.Dispose();
+        SearchDebounce = new CancellationTokenSource();
+        var token = SearchDebounce.Token;
+
+        try
+        {
+            await Task.Delay(250, token);
+            await LoadRowsAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // User is still typing.
+        }
+    }
+
+    private async Task OnQueryFieldChangedAsync(ChangeEventArgs args)
+    {
+        QueryFieldName = args.Value?.ToString() ?? "*";
+        await ApplyQueryAsync();
+    }
+
+    private async Task OnQueryOperatorChangedAsync(ChangeEventArgs args)
+    {
+        QueryOperator = args.Value?.ToString() ?? "contains";
+        if (QueryOperator is "empty" or "not-empty")
+        {
+            QueryValue = string.Empty;
+        }
+
+        await ApplyQueryAsync();
+    }
+
+    private async Task OnQueryValueInputAsync(ChangeEventArgs args)
+    {
+        QueryValue = args.Value?.ToString() ?? string.Empty;
+        CurrentPage = 1;
+        SearchDebounce?.Cancel();
+        SearchDebounce?.Dispose();
+        SearchDebounce = new CancellationTokenSource();
+        var token = SearchDebounce.Token;
+
+        try
+        {
+            await Task.Delay(250, token);
+            await LoadRowsAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // User is still typing.
+        }
+    }
+
+    private async Task ApplyQueryAsync()
+    {
+        CurrentPage = 1;
+        await LoadRowsAsync();
+    }
+
+    private async Task ClearQueryAsync()
+    {
+        ClearQueryState();
+        CurrentPage = 1;
+        await LoadRowsAsync();
+    }
+
+    private void ClearQueryState()
+    {
+        QueryFieldName = "*";
+        QueryOperator = "contains";
+        QueryValue = string.Empty;
+    }
+
+    private List<JsonQueryFilterDto> BuildQueryFilters()
+    {
+        if (string.IsNullOrWhiteSpace(QueryFieldName) || QueryFieldName == "*")
+        {
+            if (string.IsNullOrWhiteSpace(QueryValue) && QueryOperator is not "empty" and not "not-empty")
+            {
+                return [];
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(QueryValue) && QueryOperator is not "empty" and not "not-empty")
+        {
+            return [];
+        }
+
+        return
+        [
+            new JsonQueryFilterDto
+            {
+                FieldName = QueryFieldName,
+                Operator = QueryOperator,
+                Value = QueryValue
+            }
+        ];
+    }
+
+    private async Task OnPageSizeChangedAsync(ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), out var value))
+        {
+            PageSize = value;
+            CurrentPage = 1;
+            await LoadRowsAsync();
+        }
+    }
+
+    private async Task ChangePageAsync(int page)
+    {
+        CurrentPage = page;
+        await LoadRowsAsync();
+    }
+
+
+    private Task TreeEditorChanged()
+    {
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private void OpenNewFileEditor()
+    {
+        var root = JsonEditorNodeFactory.CreateDefaultNode("root", "object");
+        root.Children.Add(JsonEditorNodeFactory.CreateDefaultChild(false, root.Children));
+        NewFileEditor = new NewJsonFileEditorState
+        {
+            FileName = "NewConfig.json",
+            Root = root
+        };
+    }
+
+    private void CloseNewFileEditor() => NewFileEditor = null;
+
+    private void ChangeNewFileRootKind(ChangeEventArgs args)
+    {
+        if (NewFileEditor is null)
+        {
+            return;
+        }
+
+        var kind = NormalizeKind(args.Value?.ToString());
+        if (kind is not "object" and not "array")
+        {
+            kind = "object";
+        }
+
+        NewFileEditor.Root = JsonEditorNodeFactory.CreateDefaultNode("root", kind);
+        if (kind == "object")
+        {
+            NewFileEditor.Root.Children.Add(JsonEditorNodeFactory.CreateDefaultChild(false, NewFileEditor.Root.Children));
+        }
+    }
+
+    private string BuildNewFileJsonSafe()
+    {
+        if (NewFileEditor is null)
+        {
+            return "{}";
+        }
+
+        try
+        {
+            return JsonEditorNodeFactory.BuildJsonText(NewFileEditor.Root);
+        }
+        catch (Exception ex)
+        {
+            return "/* JSON chưa hợp lệ: " + ex.Message + " */";
+        }
+    }
+
+    private void ReplaceNewFileRootFromRaw(string? rawJson)
+    {
+        if (NewFileEditor is null || string.IsNullOrWhiteSpace(rawJson))
+        {
+            return;
+        }
+
+        try
+        {
+            var parsed = System.Text.Json.Nodes.JsonNode.Parse(rawJson);
+            if (parsed is null)
+            {
+                return;
+            }
+
+            if (parsed is not System.Text.Json.Nodes.JsonObject and not System.Text.Json.Nodes.JsonArray)
+            {
+                StatusError("Root file mới phải là object hoặc array.");
+                return;
+            }
+
+            NewFileEditor.Root = JsonEditorNodeFactory.FromJsonNode("root", parsed);
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+    }
+
+    private async Task SaveNewFileAsync()
+    {
+        if (Hub is null || NewFileEditor is null)
+        {
+            return;
+        }
+
+        Busy = true;
+        try
+        {
+            var request = new JsonFileCreateRequest
+            {
+                FileName = NewFileEditor.FileName,
+                RootKind = NewFileEditor.Root.Kind,
+                JsonText = JsonEditorNodeFactory.BuildJsonText(NewFileEditor.Root),
+                OverwriteIfExists = NewFileEditor.OverwriteIfExists
+            };
+
+            var result = await Hub.InvokeAsync<JsonCrudResultDto>("CreateJsonFileAsync", request);
+            if (!result.Success)
+            {
+                StatusError(result.Message);
+                return;
+            }
+
+            NewFileEditor = null;
+            StatusOk(result.Message);
+            Bootstrap = await Hub.InvokeAsync<ConfigBootstrapDto>("BootstrapAsync");
+            Files = Bootstrap.Files;
+            var createdFileName = request.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? request.FileName : request.FileName + ".json";
+            var created = Files.FirstOrDefault(x => string.Equals(x.FileName, createdFileName, StringComparison.OrdinalIgnoreCase));
+            if (created is not null)
+            {
+                await SelectFileAsync(created);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private void OpenCreateEditor()
+    {
+        if (SelectedTable is null)
+        {
+            return;
+        }
+
+        Editor = new RowEditorState { IsCreate = true, RowIndex = -1 };
+        if (IsObjectTable)
+        {
+            AddEditorField();
+            return;
+        }
+
+        foreach (var field in SelectedTable.Fields)
+        {
+            Editor.Fields.Add(new EditorFieldState
+            {
+                Name = field.Name,
+                Kind = NormalizeKind(field.Kind),
+                Value = DefaultValue(field.Kind),
+                IsKey = field.IsKey
+            });
+        }
+
+        if (Editor.Fields.Count == 0)
+        {
+            AddEditorField();
+        }
+    }
+
+    private void OpenEditEditor(JsonRowDto row)
+    {
+        Editor = new RowEditorState
+        {
+            IsCreate = false,
+            RowIndex = row.RowIndex,
+            RowKey = row.RowKey,
+            IdField = SelectedTable?.IdField ?? string.Empty
+        };
+
+        foreach (var cell in row.Cells)
+        {
+            Editor.OriginalCells.Add(CloneCell(cell));
+            Editor.Fields.Add(new EditorFieldState
+            {
+                Name = cell.Name,
+                Kind = NormalizeKind(cell.Kind),
+                Value = cell.Value,
+                IsKey = cell.IsKey,
+                OriginalName = cell.OriginalName ?? cell.Name,
+                OriginalKind = NormalizeKind(cell.Kind),
+                OriginalValue = cell.Value
+            });
+        }
+    }
+
+
+    private static void ToggleEditorFieldCollapsed(EditorFieldState field)
+    {
+        field.IsCollapsed = !field.IsCollapsed;
+    }
+
+    private void AddEditorField()
+    {
+        Editor ??= new RowEditorState { IsCreate = true, RowIndex = -1 };
+        Editor.Fields.Add(new EditorFieldState
+        {
+            Name = MakeUniqueEditorFieldName("newField"),
+            Kind = "string",
+            Value = string.Empty
+        });
+    }
+
+    private void RemoveEditorField(EditorFieldState field)
+    {
+        if (Editor is null)
+        {
+            return;
+        }
+
+        if (!Editor.IsCreate && !string.IsNullOrWhiteSpace(field.OriginalName))
+        {
+            Editor.DeletedFieldNames.Add(field.OriginalName);
+        }
+
+        Editor.Fields.Remove(field);
+    }
+
+    private void ChangeEditorFieldKind(EditorFieldState field, ChangeEventArgs args)
+    {
+        var previousKind = NormalizeKind(field.Kind);
+        var nextKind = NormalizeKind(args.Value?.ToString());
+        if (previousKind == nextKind)
+        {
+            return;
+        }
+
+        if (previousKind is "array" or "object" or "json")
+        {
+            try
+            {
+                field.Value = field.TreeRoot is not null
+                    ? JsonEditorNodeFactory.BuildJsonText(field.TreeRoot)
+                    : (previousKind == "array" ? BuildArrayJson(field) : field.Value);
+            }
+            catch
+            {
+                field.Value ??= previousKind == "array" ? "[]" : "{}";
+            }
+        }
+
+        field.Kind = nextKind;
+        field.TreeRoot = null;
+        if (nextKind == "array")
+        {
+            field.ArrayItemsInitialized = false;
+            EnsureArrayItems(field, preserveScalarAsFirstItem: previousKind is not "array" and not "json" and not "object");
+        }
+        else if (nextKind == "bool")
+        {
+            field.Value = string.Equals(field.Value, "true", StringComparison.OrdinalIgnoreCase) ? "true" : "false";
+        }
+        else if (nextKind == "null")
+        {
+            field.Value = null;
+        }
+        else if (nextKind == "object")
+        {
+            field.Value = string.IsNullOrWhiteSpace(field.Value) ? "{}" : field.Value;
+            field.TreeRoot = JsonEditorNodeFactory.CreateRootFromEditText(field.Name, nextKind, field.Value);
+        }
+        else if (nextKind == "json")
+        {
+            field.Value = string.IsNullOrWhiteSpace(field.Value) ? "{}" : field.Value;
+            field.TreeRoot = JsonEditorNodeFactory.CreateRootFromEditText(field.Name, nextKind, field.Value);
+        }
+    }
+
+    private void EnsureArrayItems(EditorFieldState field, bool preserveScalarAsFirstItem = false)
+    {
+        if (field.ArrayItemsInitialized)
+        {
+            return;
+        }
+
+        field.ArrayItems.Clear();
+        var rawValue = field.Value?.Trim();
+        if (!string.IsNullOrWhiteSpace(rawValue))
+        {
+            try
+            {
+                var node = System.Text.Json.Nodes.JsonNode.Parse(rawValue);
+                if (node is System.Text.Json.Nodes.JsonArray array)
+                {
+                    foreach (var item in array)
+                    {
+                        field.ArrayItems.Add(CreateArrayItemFromNode(item));
+                    }
+                }
+                else if (preserveScalarAsFirstItem)
+                {
+                    field.ArrayItems.Add(new ArrayItemEditorState
+                    {
+                        Kind = NormalizeKind(field.Kind) == "array" ? "string" : NormalizeKind(field.Kind),
+                        Value = rawValue,
+                        UseTextarea = ShouldUseTextarea(rawValue)
+                    });
+                }
+            }
+            catch
+            {
+                if (preserveScalarAsFirstItem || !string.Equals(rawValue, "[]", StringComparison.Ordinal))
+                {
+                    field.ArrayItems.Add(new ArrayItemEditorState
+                    {
+                        Kind = "string",
+                        Value = rawValue,
+                        UseTextarea = ShouldUseTextarea(rawValue)
+                    });
+                }
+            }
+        }
+
+        field.ArrayItemsInitialized = true;
+    }
+
+    private static ArrayItemEditorState CreateArrayItemFromNode(System.Text.Json.Nodes.JsonNode? node)
+    {
+        var kind = GetEditorKindFromNode(node);
+        var value = NodeToEditorText(node);
+        return new ArrayItemEditorState
+        {
+            Kind = kind,
+            Value = value,
+            UseTextarea = kind is "json" or "object" or "array" || ShouldUseTextarea(value)
+        };
+    }
+
+    private static string GetEditorKindFromNode(System.Text.Json.Nodes.JsonNode? node)
+    {
+        if (node is null)
+        {
+            return "null";
+        }
+
+        return node switch
+        {
+            System.Text.Json.Nodes.JsonObject => "object",
+            System.Text.Json.Nodes.JsonArray => "array",
+            System.Text.Json.Nodes.JsonValue value => GetEditorKindFromValue(value),
+            _ => "json"
+        };
+    }
+
+    private static string GetEditorKindFromValue(System.Text.Json.Nodes.JsonValue value)
+    {
+        if (value.TryGetValue<bool>(out _))
+        {
+            return "bool";
+        }
+
+        if (value.TryGetValue<int>(out _)
+            || value.TryGetValue<long>(out _)
+            || value.TryGetValue<float>(out _)
+            || value.TryGetValue<double>(out _)
+            || value.TryGetValue<decimal>(out _))
+        {
+            return "number";
+        }
+
+        return "string";
+    }
+
+    private static string? NodeToEditorText(System.Text.Json.Nodes.JsonNode? node)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node is System.Text.Json.Nodes.JsonValue value)
+        {
+            if (value.TryGetValue<string>(out var text))
+            {
+                return text;
+            }
+
+            if (value.TryGetValue<bool>(out var boolValue))
+            {
+                return boolValue ? "true" : "false";
+            }
+
+            return value.ToJsonString();
+        }
+
+        return node.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private void AddArrayItem(EditorFieldState field)
+    {
+        EnsureArrayItems(field);
+        field.ArrayItems.Add(new ArrayItemEditorState());
+    }
+
+    private void InsertArrayItemAfter(EditorFieldState field, ArrayItemEditorState after)
+    {
+        EnsureArrayItems(field);
+        var index = field.ArrayItems.IndexOf(after);
+        if (index < 0 || index >= field.ArrayItems.Count - 1)
+        {
+            field.ArrayItems.Add(new ArrayItemEditorState());
+            return;
+        }
+
+        field.ArrayItems.Insert(index + 1, new ArrayItemEditorState());
+    }
+
+    private void RemoveArrayItem(EditorFieldState field, ArrayItemEditorState item)
+    {
+        EnsureArrayItems(field);
+        field.ArrayItems.Remove(item);
+    }
+
+    private static void ToggleArrayItemEditor(ArrayItemEditorState item)
+    {
+        item.UseTextarea = !item.UseTextarea;
+    }
+
+    private static void ChangeArrayItemKind(ArrayItemEditorState item, ChangeEventArgs args)
+    {
+        var nextKind = NormalizeKind(args.Value?.ToString());
+        item.Kind = nextKind;
+        if (nextKind == "bool")
+        {
+            item.Value = string.Equals(item.Value, "true", StringComparison.OrdinalIgnoreCase) ? "true" : "false";
+        }
+        else if (nextKind == "null")
+        {
+            item.Value = null;
+        }
+        else if (nextKind is "object" or "json")
+        {
+            item.Value = string.IsNullOrWhiteSpace(item.Value) ? "{}" : item.Value;
+            item.UseTextarea = true;
+        }
+        else if (nextKind == "array")
+        {
+            item.Value = string.IsNullOrWhiteSpace(item.Value) ? "[]" : item.Value;
+            item.UseTextarea = true;
+        }
+    }
+
+    private static string BuildArrayJson(EditorFieldState field)
+    {
+        EnsureArrayItemsStatic(field);
+        var array = new System.Text.Json.Nodes.JsonArray();
+        foreach (var item in field.ArrayItems)
+        {
+            array.Add(ParseArrayItem(item));
+        }
+
+        return array.ToJsonString(new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        });
+    }
+
+    private static void EnsureArrayItemsStatic(EditorFieldState field)
+    {
+        if (field.ArrayItemsInitialized)
+        {
+            return;
+        }
+
+        var rawValue = field.Value?.Trim();
+        field.ArrayItems.Clear();
+        if (!string.IsNullOrWhiteSpace(rawValue))
+        {
+            try
+            {
+                if (System.Text.Json.Nodes.JsonNode.Parse(rawValue) is System.Text.Json.Nodes.JsonArray array)
+                {
+                    foreach (var item in array)
+                    {
+                        field.ArrayItems.Add(CreateArrayItemFromNode(item));
+                    }
+                }
+            }
+            catch
+            {
+                field.ArrayItems.Add(new ArrayItemEditorState { Kind = "string", Value = rawValue, UseTextarea = ShouldUseTextarea(rawValue) });
+            }
+        }
+
+        field.ArrayItemsInitialized = true;
+    }
+
+    private static System.Text.Json.Nodes.JsonNode? ParseArrayItem(ArrayItemEditorState item)
+    {
+        var value = item.Value ?? string.Empty;
+        return NormalizeKind(item.Kind) switch
+        {
+            "null" => null,
+            "bool" => bool.TryParse(value, out var boolValue)
+                ? System.Text.Json.Nodes.JsonValue.Create(boolValue)
+                : throw new FormatException("Array item bool phải là true/false."),
+            "number" => ParseArrayNumber(value),
+            "json" => string.IsNullOrWhiteSpace(value) ? null : System.Text.Json.Nodes.JsonNode.Parse(value),
+            "object" => EnsureArrayJsonType(System.Text.Json.Nodes.JsonNode.Parse(string.IsNullOrWhiteSpace(value) ? "{}" : value), "object"),
+            "array" => EnsureArrayJsonType(System.Text.Json.Nodes.JsonNode.Parse(string.IsNullOrWhiteSpace(value) ? "[]" : value), "array"),
+            _ => System.Text.Json.Nodes.JsonValue.Create(value)
+        };
+    }
+
+    private static System.Text.Json.Nodes.JsonNode ParseArrayNumber(string value)
+    {
+        if (long.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var longValue))
+        {
+            return System.Text.Json.Nodes.JsonValue.Create(longValue);
+        }
+
+        if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var doubleValue))
+        {
+            return System.Text.Json.Nodes.JsonValue.Create(doubleValue);
+        }
+
+        throw new FormatException("Array item number phải là số hợp lệ, dùng dấu chấm cho phần thập phân.");
+    }
+
+    private static System.Text.Json.Nodes.JsonNode? EnsureArrayJsonType(System.Text.Json.Nodes.JsonNode? node, string expectedKind)
+    {
+        if (expectedKind == "object" && node is System.Text.Json.Nodes.JsonObject)
+        {
+            return node;
+        }
+
+        if (expectedKind == "array" && node is System.Text.Json.Nodes.JsonArray)
+        {
+            return node;
+        }
+
+        throw new FormatException($"Array item phải là JSON {expectedKind} hợp lệ.");
+    }
+
+    private static bool ShouldUseTextarea(string? value)
+        => !string.IsNullOrEmpty(value) && (value.Length > 90 || value.Contains('\n') || value.Contains('\r'));
+
+
+    private static string DisplayFieldName(EditorFieldState field)
+        => string.IsNullOrWhiteSpace(field.Name) ? "Chưa đặt tên" : field.Name.Trim();
+
+    private static string GetKindIcon(string? kind) => NormalizeKind(kind) switch
+    {
+        "array" => "fa-list-tree",
+        "object" => "fa-cube",
+        "json" => "fa-brackets-curly",
+        "number" => "fa-hashtag",
+        "bool" => "fa-toggle-on",
+        "null" => "fa-ban",
+        _ => "fa-input-text"
+    };
+
+    private static string GetKindCssClass(string? kind) => "is-kind-" + NormalizeKind(kind);
+
+    private static string GetPreviewDepthStyle(int depth) => "--ct-depth:" + Math.Clamp(depth, 0, 8).ToString(System.Globalization.CultureInfo.InvariantCulture) + ";";
+
+    private static bool CanPreviewJsonValue(string? kind, string? value)
+    {
+        var normalizedKind = NormalizeKind(kind);
+        if (normalizedKind is not ("json" or "object" or "array") || string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        try
+        {
+            _ = System.Text.Json.Nodes.JsonNode.Parse(value);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static List<JsonPreviewRow> BuildJsonPreviewRows(string? json, int maxDepth = 5, int maxRows = 80)
+    {
+        var rows = new List<JsonPreviewRow>();
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return rows;
+        }
+
+        try
+        {
+            var root = System.Text.Json.Nodes.JsonNode.Parse(json);
+            AddPreviewNode(rows, "root", root, 0, maxDepth, maxRows);
+        }
+        catch
+        {
+            return rows;
+        }
+
+        return rows;
+    }
+
+    private static void AddPreviewNode(List<JsonPreviewRow> rows, string name, System.Text.Json.Nodes.JsonNode? node, int depth, int maxDepth, int maxRows)
+    {
+        if (rows.Count >= maxRows)
+        {
+            return;
+        }
+
+        var kind = GetEditorKindFromNode(node);
+        var isContainer = node is System.Text.Json.Nodes.JsonObject or System.Text.Json.Nodes.JsonArray;
+        rows.Add(new JsonPreviewRow
+        {
+            Depth = depth,
+            Name = name,
+            Kind = kind,
+            Value = GetPreviewValue(node),
+            IsContainer = isContainer
+        });
+
+        if (!isContainer || depth >= maxDepth || rows.Count >= maxRows)
+        {
+            return;
+        }
+
+        if (node is System.Text.Json.Nodes.JsonObject obj)
+        {
+            foreach (var property in obj)
+            {
+                AddPreviewNode(rows, property.Key, property.Value, depth + 1, maxDepth, maxRows);
+                if (rows.Count >= maxRows)
+                {
+                    return;
+                }
+            }
+        }
+        else if (node is System.Text.Json.Nodes.JsonArray array)
+        {
+            for (var i = 0; i < array.Count; i++)
+            {
+                AddPreviewNode(rows, "[" + i.ToString(System.Globalization.CultureInfo.InvariantCulture) + "]", array[i], depth + 1, maxDepth, maxRows);
+                if (rows.Count >= maxRows)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    private static string GetPreviewValue(System.Text.Json.Nodes.JsonNode? node)
+    {
+        if (node is null)
+        {
+            return "null";
+        }
+
+        if (node is System.Text.Json.Nodes.JsonObject obj)
+        {
+            return "{ " + obj.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + " field }";
+        }
+
+        if (node is System.Text.Json.Nodes.JsonArray array)
+        {
+            return "[ " + array.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + " item ]";
+        }
+
+        if (node is System.Text.Json.Nodes.JsonValue value)
+        {
+            if (value.TryGetValue<string>(out var text))
+            {
+                return ShortPreviewValue(text);
+            }
+
+            if (value.TryGetValue<bool>(out var boolValue))
+            {
+                return boolValue ? "true" : "false";
+            }
+        }
+
+        return ShortPreviewValue(node.ToJsonString());
+    }
+
+    private static string ShortPreviewValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "—";
+        }
+
+        value = value.ReplaceLineEndings(" ").Trim();
+        return value.Length > 72 ? value[..72] + "…" : value;
+    }
+
+
+    private JsonEditorNode EnsureTreeRoot(EditorFieldState field)
+    {
+        var kind = NormalizeKind(field.Kind);
+        if (field.TreeRoot is null || !TreeRootMatchesFieldKind(field.TreeRoot, kind))
+        {
+            var initialValue = kind switch
+            {
+                "array" => string.IsNullOrWhiteSpace(field.Value) ? "[]" : field.Value,
+                "object" => string.IsNullOrWhiteSpace(field.Value) ? "{}" : field.Value,
+                "json" => string.IsNullOrWhiteSpace(field.Value) ? "{}" : field.Value,
+                _ => field.Value
+            };
+            field.TreeRoot = JsonEditorNodeFactory.CreateRootFromEditText(field.Name, kind, initialValue);
+        }
+
+        return field.TreeRoot;
+    }
+
+    private static bool TreeRootMatchesFieldKind(JsonEditorNode root, string fieldKind)
+    {
+        var rootKind = JsonEditorNodeFactory.NormalizeKind(root.Kind);
+        return fieldKind switch
+        {
+            "array" => rootKind == "array",
+            "object" => rootKind == "object",
+            "json" => true,
+            _ => false
+        };
+    }
+
+    private string? BuildEditorFieldValue(EditorFieldState field, string kind)
+    {
+        if (kind == "null")
+        {
+            return null;
+        }
+
+        if (kind is "array" or "object" or "json")
+        {
+            var root = EnsureTreeRoot(field);
+            var json = JsonEditorNodeFactory.BuildJsonText(root);
+            field.Value = json;
+            return json;
+        }
+
+        return field.Value;
+    }
+
+    private string BuildTreeJsonSafe(EditorFieldState field)
+    {
+        try
+        {
+            var root = EnsureTreeRoot(field);
+            var json = JsonEditorNodeFactory.BuildJsonText(root);
+            field.Value = json;
+            return json;
+        }
+        catch
+        {
+            return field.Value ?? string.Empty;
+        }
+    }
+
+    private void ReplaceTreeRootFromRaw(EditorFieldState field, string? rawJson)
+    {
+        var kind = NormalizeKind(field.Kind);
+        field.Value = rawJson ?? string.Empty;
+        field.TreeRoot = JsonEditorNodeFactory.CreateRootFromEditText(field.Name, kind, field.Value);
+    }
+
+    private async Task SaveEditorAsync()
+    {
+        if (Hub is null || Editor is null || SelectedFile is null || SelectedTable is null)
+        {
+            return;
+        }
+
+        Busy = true;
+        try
+        {
+            var duplicatedField = Editor.Fields
+                .Where(x => !string.IsNullOrWhiteSpace(x.Name))
+                .GroupBy(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(x => x.Count() > 1);
+            if (duplicatedField is not null)
+            {
+                StatusError($"Field/key '{duplicatedField.Key}' đang bị trùng trong form.");
+                return;
+            }
+
+            var request = new JsonRowWriteRequest
+            {
+                FileName = SelectedFile.FileName,
+                TableName = SelectedTable.Name,
+                RowIndex = Editor.RowIndex,
+                RowKey = Editor.RowKey,
+                IdField = string.IsNullOrWhiteSpace(Editor.IdField) ? SelectedTable.IdField : Editor.IdField,
+                AutoMergeWithLatest = true,
+                ExpectedFileVersion = RowsPage?.FileVersion ?? SelectedFile.FileVersion,
+                OriginalCells = Editor.OriginalCells.Select(CloneCell).ToList(),
+                Cells = Editor.Fields
+                    .Where(x => !string.IsNullOrWhiteSpace(x.Name))
+                    .Select(x =>
+                    {
+                        var kind = NormalizeKind(x.Kind);
+                        return new JsonCellDto
+                        {
+                            Name = x.Name.Trim(),
+                            OriginalName = x.OriginalName,
+                            Kind = kind,
+                            Value = BuildEditorFieldValue(x, kind),
+                            IsKey = x.IsKey
+                        };
+                    })
+                    .ToList(),
+                DeletedFieldNames = Editor.DeletedFieldNames.Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+            };
+
+            var result = Editor.IsCreate
+                ? await Hub.InvokeAsync<JsonCrudResultDto>("CreateRowAsync", request, SearchText, CurrentPage, PageSize)
+                : await Hub.InvokeAsync<JsonCrudResultDto>("UpdateRowAsync", request, SearchText, CurrentPage, PageSize);
+
+            if (result.Success)
+            {
+                RowsPage = result.Page ?? RowsPage;
+                CurrentPage = RowsPage?.Page ?? CurrentPage;
+                Editor = null;
+                StatusOk(BuildCrudStatusMessage(result));
+                await RefreshFilesOnlyAsync();
+                await LoadRowsAsync();
+            }
+            else
+            {
+                StatusError(result.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private void CloseEditor() => Editor = null;
+
+    private void OpenDeleteModal(JsonRowDto row) => DeleteTarget = row;
+
+    private void CloseDeleteModal() => DeleteTarget = null;
+
+    private async Task DeleteRowAsync()
+    {
+        if (Hub is null || DeleteTarget is null || SelectedFile is null || SelectedTable is null)
+        {
+            return;
+        }
+
+        Busy = true;
+        try
+        {
+            var request = new JsonRowDeleteRequest
+            {
+                FileName = SelectedFile.FileName,
+                TableName = SelectedTable.Name,
+                RowIndex = DeleteTarget.RowIndex,
+                RowKey = DeleteTarget.RowKey,
+                IdField = SelectedTable.IdField,
+                ExpectedFileVersion = RowsPage?.FileVersion ?? SelectedFile.FileVersion,
+                OriginalCells = DeleteTarget.Cells.Select(CloneCell).ToList()
+            };
+
+            var result = await Hub.InvokeAsync<JsonCrudResultDto>("DeleteRowAsync", request, SearchText, CurrentPage, PageSize);
+            if (result.Success)
+            {
+                RowsPage = result.Page ?? RowsPage;
+                CurrentPage = RowsPage?.Page ?? CurrentPage;
+                DeleteTarget = null;
+                StatusOk(BuildCrudStatusMessage(result));
+                await RefreshFilesOnlyAsync();
+                await LoadRowsAsync();
+            }
+            else
+            {
+                StatusError(result.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task ApplyRealtimeFilesChangeAsync(ConfigExternalChangeDto change)
+    {
+        LastRealtimeFileChangeAt = change.ChangedAt;
+
+        if (!change.Folder.IsValid)
+        {
+            Files.Clear();
+            SelectedFile = null;
+            SelectedTable = null;
+            Tables.Clear();
+            RowsPage = null;
+            StatusError(change.Message);
+            StateHasChanged();
+            return;
+        }
+
+        Files = change.Files;
+        if (SelectedFile is not null)
+        {
+            var updatedSelectedFile = Files.FirstOrDefault(x => string.Equals(x.FileName, SelectedFile.FileName, StringComparison.OrdinalIgnoreCase));
+            if (updatedSelectedFile is not null)
+            {
+                SelectedFile = updatedSelectedFile;
+            }
+        }
+
+        var selectedFileWasChanged = SelectedFile is not null
+            && (string.IsNullOrWhiteSpace(change.FileName)
+                || string.Equals(change.FileName, SelectedFile.FileName, StringComparison.OrdinalIgnoreCase));
+
+        if (selectedFileWasChanged)
+        {
+            if (Editor is not null)
+            {
+                if (IsEditorDirty())
+                {
+                    await RefreshFilesOnlyAsync();
+                    StatusOk(change.Message + " Form đang sửa sẽ giữ input hiện tại; khi lưu tool auto-merge vào JSON mới nhất và bỏ qua field Unity vừa đổi.");
+                }
+                else
+                {
+                    Editor = null;
+                    await RefreshFilesOnlyAsync();
+                    await LoadRowsAsync();
+                    StatusOk(change.Message + " Form chưa sửa nên đã reload theo Unity.");
+                }
+            }
+            else if (DeleteTarget is not null)
+            {
+                DeleteTarget = null;
+                await RefreshFilesOnlyAsync();
+                await LoadRowsAsync();
+                StatusOk(change.Message + " Đã đóng popup xóa vì dòng có thể đã đổi trong Unity.");
+            }
+            else
+            {
+                await RefreshFilesOnlyAsync();
+                await LoadRowsAsync();
+                StatusOk(change.Message);
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(change.Message))
+        {
+            StatusOk(change.Message);
+        }
+
+        StateHasChanged();
+    }
+
+    private static JsonCellDto CloneCell(JsonCellDto cell)
+        => new()
+        {
+            Name = cell.Name,
+            OriginalName = cell.OriginalName,
+            Kind = cell.Kind,
+            Value = cell.Value,
+            IsKey = cell.IsKey
+        };
+
+    private bool IsEditorDirty()
+    {
+        if (Editor is null || Editor.IsCreate)
+        {
+            return Editor?.Fields.Any(x => !string.IsNullOrWhiteSpace(x.Value) || !string.Equals(x.Name, "newField", StringComparison.OrdinalIgnoreCase)) == true;
+        }
+
+        if (Editor.DeletedFieldNames.Count > 0)
+        {
+            return true;
+        }
+
+        foreach (var field in Editor.Fields)
+        {
+            if (!string.Equals(field.Name?.Trim(), field.OriginalName?.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!string.Equals(NormalizeKind(field.Kind), NormalizeKind(field.OriginalKind), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var kind = NormalizeKind(field.Kind);
+            var currentValue = BuildEditorFieldValue(field, kind);
+            if (!string.Equals(currentValue ?? string.Empty, field.OriginalValue ?? string.Empty, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string BuildCrudStatusMessage(JsonCrudResultDto result)
+    {
+        if (result.Conflicts.Count == 0)
+        {
+            return result.Message;
+        }
+
+        var details = string.Join("; ", result.Conflicts.Take(3));
+        if (result.Conflicts.Count > 3)
+        {
+            details += $"; +{result.Conflicts.Count - 3} field khác";
+        }
+
+        return result.Message + " " + details;
+    }
+
+    private async Task RefreshFilesOnlyAsync()
+    {
+        if (Hub is null)
+        {
+            return;
+        }
+
+        Files = await Hub.InvokeAsync<List<JsonConfigFileDto>>("GetFilesAsync");
+        if (SelectedFile is not null)
+        {
+            SelectedFile = Files.FirstOrDefault(x => x.FileName == SelectedFile.FileName) ?? SelectedFile;
+        }
+
+        if (SelectedFile is not null)
+        {
+            Tables = await Hub.InvokeAsync<List<JsonTableDto>>("GetTablesAsync", SelectedFile.FileName);
+            await RefreshKeySuggestionsAsync();
+            if (SelectedTable is not null)
+            {
+                SelectedTable = Tables.FirstOrDefault(x => x.Name == SelectedTable.Name) ?? SelectedTable;
+            }
+        }
+    }
+
+    private string MakeUniqueEditorFieldName(string prefix)
+    {
+        if (Editor is null)
+        {
+            return prefix;
+        }
+
+        var existing = Editor.Fields.Select(x => x.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!existing.Contains(prefix))
+        {
+            return prefix;
+        }
+
+        for (var i = 2; i < 10_000; i++)
+        {
+            var candidate = prefix + i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (!existing.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return prefix + Guid.NewGuid().ToString("N")[..6];
+    }
+
+    private static string NormalizeKind(string? kind)
+    {
+        return kind?.Trim().ToLowerInvariant() switch
+        {
+            "boolean" => "bool",
+            "object" => "object",
+            "array" => "array",
+            "json" => "json",
+            "number" => "number",
+            "null" => "null",
+            "bool" => "bool",
+            _ => "string"
+        };
+    }
+
+    private static string DefaultValue(string? kind) => NormalizeKind(kind) switch
+    {
+        "number" => "0",
+        "bool" => "false",
+        "object" => "{}",
+        "array" => "[]",
+        "json" => "{}",
+        "null" => string.Empty,
+        _ => string.Empty
+    };
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        double value = bytes;
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return $"{value:0.#} {units[unit]}";
+    }
+
+    private static string ShortValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "—";
+        }
+
+        value = value.ReplaceLineEndings(" ").Trim();
+        return value.Length > 120 ? value[..120] + "…" : value;
+    }
+
+    private void StatusOk(string message)
+    {
+        StatusIsError = false;
+        StatusMessage = message;
+    }
+
+    private void StatusError(string message)
+    {
+        StatusIsError = true;
+        StatusMessage = message;
+    }
+
+    private void ClearStatus()
+    {
+        StatusMessage = null;
+        StatusIsError = false;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        SearchDebounce?.Cancel();
+        SearchDebounce?.Dispose();
+        ChangedSubscription?.Dispose();
+        FilesChangedSubscription?.Dispose();
+        if (Hub is not null)
+        {
+            await Hub.DisposeAsync();
+        }
+    }
+
+    private sealed class JsonPreviewRow
+    {
+        public int Depth { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Kind { get; set; } = "string";
+        public string Value { get; set; } = string.Empty;
+        public bool IsContainer { get; set; }
+    }
+
+    private sealed class NewJsonFileEditorState
+    {
+        public string FileName { get; set; } = "NewConfig.json";
+        public bool OverwriteIfExists { get; set; }
+        public JsonEditorNode Root { get; set; } = JsonEditorNodeFactory.CreateDefaultNode("root", "object");
+    }
+
+    private sealed class RowEditorState
+    {
+        public bool IsCreate { get; set; }
+        public int RowIndex { get; set; }
+        public string RowKey { get; set; } = string.Empty;
+        public string IdField { get; set; } = string.Empty;
+        public List<JsonCellDto> OriginalCells { get; } = [];
+        public List<EditorFieldState> Fields { get; } = [];
+        public List<string> DeletedFieldNames { get; } = [];
+    }
+
+    private sealed class EditorFieldState
+    {
+        public string ClientId { get; } = Guid.NewGuid().ToString("N");
+        public string Name { get; set; } = string.Empty;
+        public string Kind { get; set; } = "string";
+        public string? Value { get; set; }
+        public bool IsKey { get; set; }
+        public string? OriginalName { get; set; }
+        public string? OriginalKind { get; set; }
+        public string? OriginalValue { get; set; }
+        public bool ArrayItemsInitialized { get; set; }
+        public bool IsCollapsed { get; set; }
+        public JsonEditorNode? TreeRoot { get; set; }
+        public List<ArrayItemEditorState> ArrayItems { get; } = [];
+    }
+
+    private sealed class ArrayItemEditorState
+    {
+        public string ClientId { get; } = Guid.NewGuid().ToString("N");
+        public string Kind { get; set; } = "string";
+        public string? Value { get; set; } = string.Empty;
+        public bool UseTextarea { get; set; }
+    }
+}

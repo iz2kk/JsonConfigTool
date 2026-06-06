@@ -1,0 +1,22 @@
+<Project>
+  <PropertyGroup>
+    <!-- ConfigTool slim output defaults. Override any value from command line if needed. -->
+    <ConfigToolSlimOutput Condition="'$(ConfigToolSlimOutput)' == ''">true</ConfigToolSlimOutput>
+
+    <!-- Keep Vietnamese/English only. This prevents most NuGet satellite language folders from being copied. -->
+    <SatelliteResourceLanguages Condition="'$(SatelliteResourceLanguages)' == ''">vi;en</SatelliteResourceLanguages>
+    <NeutralLanguage Condition="'$(NeutralLanguage)' == ''">vi</NeutralLanguage>
+    <InvariantGlobalization>false</InvariantGlobalization>
+
+    <!-- Smaller Release/Publish output; Debug remains friendly for development. -->
+    <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <PublishReadyToRun>false</PublishReadyToRun>
+
+    <!-- Safe default: no linker trimming. Enable only when publishing with /p:ConfigToolEnableAggressiveTrim=true. -->
+    <PublishTrimmed Condition="'$(ConfigToolEnableAggressiveTrim)' == 'true'">true</PublishTrimmed>
+    <TrimMode Condition="'$(ConfigToolEnableAggressiveTrim)' == 'true'">partial</TrimMode>
+    <SuppressTrimAnalysisWarnings Condition="'$(ConfigToolEnableAggressiveTrim)' == 'true'">true</SuppressTrimAnalysisWarnings>
+  </PropertyGroup>
+</Project>
