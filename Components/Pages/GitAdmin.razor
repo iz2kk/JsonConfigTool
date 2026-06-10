@@ -1,0 +1,2878 @@
+@page "/git"
+@implements IAsyncDisposable
+@inject ConfigSignalRHost SignalRHost
+@inject IConfigFolderPicker FolderPicker
+@inject ILocalExplorerService Explorer
+@inject IJSRuntime JS
+
+<PageTitle>Git Admin</PageTitle>
+
+<div class="ct-page git-page">
+    <section class="ct-hero card border-0 shadow-sm">
+        <div class="card-body p-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div>
+                    <div class="ct-eyebrow"><i class="fa-duotone fa-solid fa-code-branch"></i> Git Admin</div>
+                    <h1 class="ct-section-title mb-1">GitHub / GitLab / Local Git</h1>
+                    <p class="ct-muted mb-0">Quản lý nhiều tài khoản, folder dự án, .gitignore, init/remote/branch/commit/push/pull/clone và console log realtime.</p>
+                </div>
+                <div class="d-flex flex-wrap gap-2 align-items-center">
+                    <span class="ct-status-pill @(HubReady ? "is-online" : "is-offline")">
+                        <i class="fa-duotone fa-solid @(HubReady ? "fa-circle-check" : "fa-plug-circle-xmark")"></i>
+                        @(HubReady ? "SignalR Git OK" : "SignalR Git chưa kết nối")
+                    </span>
+                    <button class="btn btn-outline-warning ct-btn" type="button" disabled="@(!Busy || CancelRequested)" @onclick="CancelCurrentGitTabAsync">
+                        <i class="fa-duotone fa-solid fa-ban"></i> Hủy tab hiện tại
+                    </button>
+                    <button class="btn btn-outline-danger ct-btn" type="button" disabled="@(!Busy || CancelRequested)" @onclick="CancelAllGitActionsAsync">
+                        <i class="fa-duotone fa-solid fa-octagon-xmark"></i> Hủy tất cả
+                    </button>
+                    <button class="btn btn-outline-secondary ct-btn" type="button" disabled="@Busy" @onclick="ReloadAllAsync">
+                        <i class="fa-duotone fa-solid fa-rotate"></i> Reload
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(StatusMessage))
+    {
+        <div class="alert @(StatusIsError ? "alert-danger" : "alert-success") ct-alert shadow-sm" role="alert">
+            <i class="fa-duotone fa-solid @(StatusIsError ? "fa-triangle-exclamation" : "fa-circle-info")"></i>
+            <span>@StatusMessage</span>
+            <button type="button" class="btn-close ms-auto" aria-label="Close" @onclick="ClearStatus"></button>
+        </div>
+    }
+
+    @if (BatchResults.Items.Count > 0)
+    {
+        <section class="card border-0 shadow-sm ct-panel mb-3">
+            <div class="card-body p-3">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                    <h2 class="ct-section-title mb-0"><i class="fa-duotone fa-solid fa-list-check"></i> Multi-account action result</h2>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="() => BatchResults = new()">Clear</button>
+                </div>
+                <div class="git-batch-result-list">
+                    @foreach (var item in BatchResults.Items)
+                    {
+                        <div class="git-batch-result-row @(item.Success ? "success" : "error")">
+                            <div>
+                                <b>@item.Provider / @item.AccountName</b>
+                                <div class="small ct-muted">@item.Message</div>
+                            </div>
+                            <span class="badge @(item.Success ? "text-bg-success" : "text-bg-danger")">@(item.Success ? "OK" : "Lỗi")</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        </section>
+    }
+
+    <div class="git-workspace-layout">
+        <aside class="git-account-pane">
+            <section class="card border-0 shadow-sm ct-panel git-account-sidebar h-100">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+                        <div>
+                            <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-user-lock"></i> Git accounts</h2>
+                            <div class="ct-muted small">Lưu tại <code>@GitConfigPath</code></div>
+                        </div>
+                        <span class="badge text-bg-primary">@FilteredAccounts.Count/@Accounts.Count</span>
+                    </div>
+
+                    <button class="btn btn-primary w-100 ct-btn mb-3" type="button" disabled="@Busy" @onclick="OpenCreateAccountModal">
+                        <i class="fa-duotone fa-solid fa-user-plus"></i> Thêm Git account
+                    </button>
+
+                    <div class="input-group input-group-sm git-search-box mb-3">
+                        <span class="input-group-text"><i class="fa-duotone fa-solid fa-magnifying-glass"></i></span>
+                        <input class="form-control" value="@AccountSearch" @oninput="OnAccountSearchChanged" placeholder="Tìm account/provider/email..." />
+                        @if (!string.IsNullOrWhiteSpace(AccountSearch))
+                        {
+                            <button class="btn btn-outline-secondary" type="button" title="Xóa tìm kiếm account" @onclick="ClearAccountSearch">×</button>
+                        }
+                    </div>
+
+                    <div class="git-account-multi-toolbar">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                            <span class="small fw-bold"><i class="fa-duotone fa-solid fa-list-check"></i> Multi account: @SelectedGitAccountIds.Count selected</span>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@(Busy || SelectedGitAccountIds.Count == 0)" @onclick="ClearSelectedGitAccounts">Bỏ chọn</button>
+                        </div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button class="btn btn-sm btn-outline-primary" type="button" disabled="@Busy" @onclick="SelectVisibleGitAccounts">Chọn trang này</button>
+                            <button class="btn btn-sm btn-outline-primary" type="button" disabled="@Busy" @onclick="SelectAllGitAccounts">Chọn tất cả</button>
+                            <button class="btn btn-sm btn-outline-success" type="button" disabled="@(Busy || SelectedGitAccountIds.Count == 0)" @onclick="TestSelectedAccountsAsync">Test selected</button>
+                            <button class="btn btn-sm btn-outline-success" type="button" disabled="@(Busy || SelectedGitAccountIds.Count == 0)" @onclick="LoadProviderRepositoriesAsync">Repo selected</button>
+                        </div>
+                    </div>
+
+                    <div class="git-account-list git-account-list-compact">
+                        @if (FilteredAccounts.Count == 0)
+                        {
+                            <div class="ct-empty-inline">Chưa có account. Bấm “Thêm Git account” để thêm GitHub/GitLab.</div>
+                        }
+                        @foreach (var account in PagedAccounts)
+                        {
+                            <div class="git-account-card git-account-card-compact @(SelectedAccountId == account.Id ? "active" : null)">
+                                <input class="form-check-input git-account-check" type="checkbox" checked="@SelectedGitAccountIds.Contains(account.Id)" @onchange="args => ToggleGitAccountSelection(account.Id, args)" title="Chọn account để chạy action hàng loạt" />
+                                <button type="button" class="git-account-main" title="Chọn account này" @onclick="() => SelectAccount(account)">
+                                    <span class="d-flex align-items-center gap-2">
+                                        <span class="git-provider @account.Provider">@account.Provider</span>
+                                        @if (account.IsDefault)
+                                        {
+                                            <span class="badge rounded-pill text-bg-success">default</span>
+                                        }
+                                    </span>
+                                    <span class="fw-semibold text-truncate">@account.Name</span>
+                                    <small class="text-truncate">@(account.Username ?? account.Email ?? account.ApiBaseUrl)</small>
+                                </button>
+                                <div class="git-account-actions">
+                                    <button class="btn btn-sm btn-outline-primary" title="Test đăng nhập" disabled="@Busy" @onclick="() => TestAccountAsync(account)">
+                                        <i class="fa-duotone fa-solid fa-right-to-bracket"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary" title="Sửa account" disabled="@Busy" @onclick="() => EditAccount(account)">
+                                        <i class="fa-duotone fa-solid fa-pen"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" title="Xóa account" disabled="@Busy" @onclick="() => DeleteAccountAsync(account)">
+                                        <i class="fa-duotone fa-solid fa-trash"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+
+                    @if (FilteredAccounts.Count > AccountsPageSize)
+                    {
+                        <div class="git-account-pager mt-3">
+                            <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@(Busy || AccountPage <= 1)" @onclick="PreviousAccountPage">
+                                <i class="fa-duotone fa-solid fa-chevron-left"></i>
+                            </button>
+                            <span>Trang @AccountPage/@AccountTotalPages</span>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@(Busy || AccountPage >= AccountTotalPages)" @onclick="NextAccountPage">
+                                <i class="fa-duotone fa-solid fa-chevron-right"></i>
+                            </button>
+                        </div>
+                        <div class="ct-muted xsmall mt-1">Hiển thị @PagedAccounts.Count() / @FilteredAccounts.Count account sau lọc.</div>
+                    }
+                </div>
+            </section>
+        </aside>
+
+        <main class="git-action-pane">
+            <section class="card border-0 shadow-sm ct-panel h-100">
+                <div class="card-body p-3 p-lg-4">
+                    @if (SelectedAccount is { } selectedAccount)
+                    {
+                        <div class="git-selected-account-strip mb-3">
+                            <div>
+                                <span class="git-provider @selectedAccount.Provider">@selectedAccount.Provider</span>
+                                <strong>@selectedAccount.Name</strong>
+                                <small>@(selectedAccount.Username ?? selectedAccount.Email ?? selectedAccount.ApiBaseUrl)</small>
+                            </div>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="btn btn-sm btn-outline-primary" type="button" disabled="@Busy" @onclick="() => TestAccountAsync(selectedAccount)">
+                                    <i class="fa-duotone fa-solid fa-right-to-bracket"></i> Test
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@Busy" @onclick="() => EditAccount(selectedAccount)">
+                                    <i class="fa-duotone fa-solid fa-pen"></i> Sửa account
+                                </button>
+                            </div>
+                        </div>
+                    }
+
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+                        <div>
+                            <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-folder-code"></i> Project folder</h2>
+                            <div class="ct-muted small">Chọn thư mục dự án local, sau đó dùng Git Explorer và các lệnh Git.</div>
+                        </div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button class="btn btn-primary ct-btn" type="button" disabled="@Busy" @onclick="PickProjectFolderAsync">
+                                <i class="fa-duotone fa-solid fa-folder-open"></i> OpenFolder dialog
+                            </button>
+                            <button class="btn btn-outline-secondary ct-btn" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="OpenProjectFolderAsync">
+                                <i class="fa-duotone fa-solid fa-arrow-up-right-from-square"></i> Explorer
+                            </button>
+                            <button class="btn btn-outline-primary ct-btn" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="RefreshRepositoryAsync">
+                                <i class="fa-duotone fa-solid fa-arrows-rotate"></i> Refresh Git
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="input-group input-group-sm mb-3">
+                        <span class="input-group-text"><i class="fa-duotone fa-solid fa-folder"></i></span>
+                        <input class="form-control" @bind="ProjectFolder" @bind:event="oninput" placeholder="D:\LapTrinh\Project" />
+                        <button class="btn btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="UseProjectFolderAsync">Dùng thư mục này</button>
+                    </div>
+
+                    <div class="git-status-grid mb-3">
+                        <div class="ct-mini-box">
+                            <div class="small ct-muted">Repository</div>
+                            <div class="fw-bold @(Repository?.IsGitRepository == true ? "text-success" : "text-danger")">
+                                @(Repository?.IsGitRepository == true ? "Đã git init" : "Chưa init")
+                            </div>
+                        </div>
+                        <div class="ct-mini-box">
+                            <div class="small ct-muted">Branch</div>
+                            <div class="fw-bold">@(Repository?.CurrentBranch ?? "-")</div>
+                        </div>
+                        <div class="ct-mini-box">
+                            <div class="small ct-muted">Remote</div>
+                            <div class="fw-bold">@(Repository?.Remotes.Count ?? 0)</div>
+                        </div>
+                        <div class="ct-mini-box">
+                            <div class="small ct-muted">Changes</div>
+                            <div class="fw-bold @(Repository?.HasChanges == true ? "text-warning" : "text-success")">@(Repository?.Changes.Count ?? 0)</div>
+                        </div>
+                    </div>
+
+                    <ul class="nav nav-pills git-tabs mb-3">
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "commands" ? "active" : null)" type="button" @onclick='() => ActiveTab = "commands"'>Lệnh Git</button></li>
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "repositories" ? "active" : null)" type="button" @onclick='() => ActiveTab = "repositories"'>Repositories</button></li>
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "traffic" ? "active" : null)" type="button" @onclick='() => ActiveTab = "traffic"'>Traffic</button></li>
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "explorer" ? "active" : null)" type="button" @onclick='() => ActiveTab = "explorer"'>File Explorer Git/Local</button></li>
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "ignore" ? "active" : null)" type="button" @onclick='() => ActiveTab = "ignore"'>.gitignore</button></li>
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "config" ? "active" : null)" type="button" @onclick='() => ActiveTab = "config"'>.git / .github config</button></li>
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "workspaces" ? "active" : null)" type="button" @onclick='() => ActiveTab = "workspaces"'>Multi workspace</button></li>
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "oauthsettings" ? "active" : null)" type="button" @onclick='() => ActiveTab = "oauthsettings"'>OAuth2.json</button></li>
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "clone" ? "active" : null)" type="button" @onclick='() => ActiveTab = "clone"'>Clone / Create repo</button></li>
+                        <li class="nav-item"><button class="nav-link @(ActiveTab == "scan" ? "active" : null)" type="button" @onclick='() => ActiveTab = "scan"'>Tìm repo init</button></li>
+                    </ul>
+
+                    <div class="git-cancel-toolbar mb-3">
+                        <div>
+                            <strong>@GetGitTabTitle(CurrentBusyScope ?? ActiveTab)</strong>
+                            <span class="ct-muted small ms-2">@(Busy ? BusyText : "Không có hành động đang chạy")</span>
+                        </div>
+                        <div class="d-flex flex-wrap gap-2">
+                            <button class="btn btn-sm btn-outline-warning" type="button" disabled="@(!Busy || CancelRequested)" @onclick="CancelCurrentGitTabAsync">
+                                <i class="fa-duotone fa-solid fa-ban"></i> Hủy tab này
+                            </button>
+                            <button class="btn btn-sm btn-outline-danger" type="button" disabled="@(!Busy || CancelRequested)" @onclick="CancelAllGitActionsAsync">
+                                <i class="fa-duotone fa-solid fa-octagon-xmark"></i> Hủy tất cả hành động
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (ActiveTab == "commands")
+                    {
+                        <div class="row g-3">
+                            <div class="col-12 col-lg-6">
+                                <div class="ct-mini-box h-100">
+                                    <div class="fw-bold mb-2"><i class="fa-duotone fa-solid fa-code-branch"></i> Init / Remote</div>
+                                    <div class="d-flex flex-wrap gap-2 mb-3">
+                                        <button class="btn btn-sm btn-success" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="GitInitAsync">
+                                            <i class="fa-duotone fa-solid fa-play"></i> git init
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="RefreshRepositoryAsync">
+                                            <i class="fa-duotone fa-solid fa-rotate"></i> status
+                                        </button>
+                                    </div>
+                                    <label class="form-label small">Remote name</label>
+                                    <input class="form-control form-control-sm mb-2" @bind="RemoteName" placeholder="origin" />
+                                    <label class="form-label small">Remote URL</label>
+                                    <input class="form-control form-control-sm mb-2" @bind="RemoteUrl" placeholder="https://github.com/user/repo.git" />
+                                    <button class="btn btn-sm btn-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder) || string.IsNullOrWhiteSpace(RemoteUrl))" @onclick="AddRemoteAsync">
+                                        <i class="fa-duotone fa-solid fa-link"></i> Add / Set remote
+                                    </button>
+                                    @if (Repository?.Remotes.Count > 0)
+                                    {
+                                        <div class="git-mini-list mt-3">
+                                            @foreach (var remote in Repository.Remotes)
+                                            {
+                                                <button type="button" class="git-mini-row" @onclick="() => FillRemote(remote)">
+                                                    <b>@remote.Name</b>
+                                                    <small>@(string.IsNullOrWhiteSpace(remote.PushUrl) ? remote.FetchUrl : remote.PushUrl)</small>
+                                                </button>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <div class="ct-mini-box h-100">
+                                    <div class="fw-bold mb-2"><i class="fa-duotone fa-solid fa-code-commit"></i> Commit / Push / Pull</div>
+                                    <label class="form-label small">Commit message</label>
+                                    <input class="form-control form-control-sm mb-2" @bind="CommitMessage" placeholder="Update project" />
+                                    <label class="form-check small mb-2">
+                                        <input class="form-check-input" type="checkbox" @bind="StageAll" /> Stage all file thay đổi khi commit
+                                    </label>
+                                    <div class="small ct-muted mb-2">Đã chọn @SelectedGitPaths.Count file/folder trong Explorer. Git add mặc định không dùng <code>-f</code>, nên vẫn tuân theo <code>.gitignore</code>.</div>
+                                    <div class="d-flex flex-wrap gap-2 mb-3">
+                                        <button class="btn btn-sm btn-outline-success" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder) || SelectedGitPaths.Count == 0)" @onclick="AddSelectedFilesAsync">
+                                            <i class="fa-duotone fa-solid fa-plus"></i> Add selected
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-success" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="AddAllFilesAsync">
+                                            <i class="fa-duotone fa-solid fa-layer-plus"></i> Add all
+                                        </button>
+                                        <button class="btn btn-sm btn-success" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder) || string.IsNullOrWhiteSpace(CommitMessage))" @onclick="CommitAsync">
+                                            <i class="fa-duotone fa-solid fa-check"></i> Commit
+                                        </button>
+                                        <button class="btn btn-sm btn-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="PushAsync">
+                                            <i class="fa-duotone fa-solid fa-upload"></i> Push
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="PullAsync">
+                                            <i class="fa-duotone fa-solid fa-download"></i> Pull
+                                        </button>
+                                        <button class="btn btn-sm btn-warning" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder) || string.IsNullOrWhiteSpace(CommitMessage))" @onclick="AddCommitPushAsync">
+                                            <i class="fa-duotone fa-solid fa-rocket"></i> Add → Commit → Push
+                                        </button>
+                                    </div>
+                                    <div class="row g-2">
+                                        <div class="col-6">
+                                            <label class="form-label small">Remote</label>
+                                            <input class="form-control form-control-sm" @bind="PushRemote" placeholder="origin" />
+                                        </div>
+                                        <div class="col-6">
+                                            <label class="form-label small">Branch</label>
+                                            <input class="form-control form-control-sm" @bind="PushBranch" placeholder="main/master/current" />
+                                        </div>
+                                        <div class="col-12">
+                                            <label class="form-check small">
+                                                <input class="form-check-input" type="checkbox" @bind="PullRebase" /> Pull dùng --rebase
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <div class="ct-mini-box">
+                                    <div class="fw-bold mb-2"><i class="fa-duotone fa-solid fa-code-branch"></i> Branch</div>
+                                    <div class="input-group input-group-sm mb-2">
+                                        <input class="form-control" @bind="NewBranchName" placeholder="feature/sql-tool" />
+                                        <button class="btn btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder) || string.IsNullOrWhiteSpace(NewBranchName))" @onclick="CreateBranchAsync">Tạo branch</button>
+                                    </div>
+                                    @if (Repository?.Branches.Count > 0)
+                                    {
+                                        <div class="input-group input-group-sm git-search-box mb-2">
+                                            <span class="input-group-text"><i class="fa-duotone fa-solid fa-magnifying-glass"></i></span>
+                                            <input class="form-control" @bind="BranchSearch" @bind:event="oninput" placeholder="Tìm branch..." />
+                                            @if (!string.IsNullOrWhiteSpace(BranchSearch))
+                                            {
+                                                <button class="btn btn-outline-secondary" type="button" title="Xóa tìm kiếm branch" @onclick="ClearBranchSearch">×</button>
+                                            }
+                                        </div>
+                                        <div class="d-flex flex-wrap gap-2">
+                                            @foreach (var branch in FilteredRepositoryBranches)
+                                            {
+                                                <button class="btn btn-sm @(branch.IsCurrent ? "btn-primary" : "btn-outline-secondary")" type="button" disabled="@(Busy || branch.IsCurrent || branch.IsRemote)" @onclick="() => CheckoutBranchAsync(branch.Name)">
+                                                    @(branch.IsCurrent ? "✓ " : null)@branch.Name
+                                                </button>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else if (ActiveTab == "repositories")
+                    {
+                        <div class="ct-mini-box git-repo-panel">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                <div>
+                                    <div class="fw-bold"><i class="fa-duotone fa-solid fa-book-bookmark"></i> Repository list trên GitHub/GitLab</div>
+                                    <div class="small ct-muted">Lấy repository từ account đang chọn hoặc nhiều account đã tick bên trái, click repo để dùng nhanh cho clone, remote, push/pull và traffic.</div>
+                                </div>
+                                <button class="btn btn-sm btn-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(RepoListAccountId) && SelectedGitAccountIds.Count == 0)" @onclick="LoadProviderRepositoriesAsync">
+                                    <i class="fa-duotone fa-solid fa-cloud-arrow-down"></i> Lấy list repositories
+                                </button>
+                            </div>
+                            <div class="row g-2 align-items-end mb-3">
+                                <div class="col-12 col-lg-4">
+                                    <label class="form-label small">Account</label>
+                                    <select class="form-select form-select-sm" @bind="RepoListAccountId">
+                                        <option value="">-- chọn account --</option>
+                                        @foreach (var account in Accounts)
+                                        {
+                                            <option value="@account.Id">@account.Provider - @account.Name</option>
+                                        }
+                                    </select>
+                                    <div class="ct-muted xsmall mt-1">Nếu tick nhiều account ở sidebar thì nút reload sẽ lấy repo hàng loạt.</div>
+                                </div>
+                                <div class="col-12 col-lg-5">
+                                    <label class="form-label small">Search repository</label>
+                                    <input class="form-control form-control-sm" @bind="RepoListSearch" @bind:event="oninput" placeholder="tên repo / owner / mô tả" />
+                                </div>
+                                <div class="col-12 col-lg-3 d-grid">
+                                    <button class="btn btn-sm btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(RepoListAccountId) && SelectedGitAccountIds.Count == 0)" @onclick="LoadProviderRepositoriesAsync">Reload repo</button>
+                                </div>
+                            </div>
+
+                            @if (ProviderRepositories is null)
+                            {
+                                <div class="ct-empty-inline">Chưa tải repository. Chọn account rồi bấm “Lấy list repositories”.</div>
+                            }
+                            else if (!ProviderRepositories.Success)
+                            {
+                                <div class="alert alert-warning mb-0">@ProviderRepositories.Message</div>
+                            }
+                            else if (ProviderRepositories.Items.Count == 0)
+                            {
+                                <div class="ct-empty-inline">Không tìm thấy repository nào theo điều kiện hiện tại.</div>
+                            }
+                            else
+                            {
+                                <div class="git-repo-summary mb-2">
+                                    <span><b>@ProviderRepositories.Items.Count</b> repositories</span>
+                                    <span>Provider: <code>@ProviderRepositories.Provider</code></span>
+                                    @if (ProviderRepositories.IsTruncated)
+                                    {
+                                        <span class="badge text-bg-warning">đã giới hạn kết quả</span>
+                                    }
+                                </div>
+                                <div class="git-provider-repo-list">
+                                    @foreach (var repo in ProviderRepositories.Items)
+                                    {
+                                        <div class="git-provider-repo-row @(SelectedProviderRepositoryFullName == repo.FullName ? "active" : null)">
+                                            <button type="button" class="git-provider-repo-main" @onclick="() => SelectProviderRepository(repo)">
+                                                <div class="git-provider-repo-title">
+                                                    <i class="fa-duotone fa-solid fa-book"></i>
+                                                    <b>@repo.FullName</b>
+                                                    @if (!string.IsNullOrWhiteSpace(repo.AccountName))
+                                                    {
+                                                        <span class="repo-account">@repo.Provider / @repo.AccountName</span>
+                                                    }
+                                                    <span class="git-repo-visibility @(repo.IsPrivate ? "private" : "public")">@(repo.IsPrivate ? "private" : "public")</span>
+                                                </div>
+                                                <div class="git-provider-repo-desc">@(string.IsNullOrWhiteSpace(repo.Description) ? "Không có mô tả" : repo.Description)</div>
+                                                <div class="git-provider-repo-meta">
+                                                    <span>Branch: <code>@(string.IsNullOrWhiteSpace(repo.DefaultBranch) ? "-" : repo.DefaultBranch)</code></span>
+                                                    <span>★ @repo.StarCount</span>
+                                                    <span>⑂ @repo.ForkCount</span>
+                                                    <span>Issues @repo.OpenIssueCount</span>
+                                                    <span>@(repo.UpdatedAt is null ? "-" : repo.UpdatedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"))</span>
+                                                </div>
+                                            </button>
+                                            <div class="git-provider-repo-actions">
+                                                <button class="btn btn-sm btn-outline-success" type="button" disabled="@Busy" @onclick="() => UseProviderRepositoryForClone(repo)">Clone</button>
+                                                <button class="btn btn-sm btn-outline-primary" type="button" disabled="@Busy" @onclick="() => UseProviderRepositoryAsRemote(repo)">Remote</button>
+                                                <button class="btn btn-sm btn-outline-warning" type="button" disabled="@Busy" @onclick="() => LoadTrafficForRepositoryAsync(repo)">Traffic</button>
+                                                <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@Busy" @onclick="() => PrepareWorkspaceFromRepository(repo)">Map folder</button>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (ActiveTab == "traffic")
+                    {
+                        <div class="ct-mini-box git-traffic-panel">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                <div>
+                                    <div class="fw-bold"><i class="fa-duotone fa-solid fa-chart-line"></i> Repository traffic</div>
+                                    <div class="small ct-muted">Vẽ biểu đồ lượt xem, unique visitors, clone và unique cloners theo dữ liệu repository.</div>
+                                </div>
+                                <button class="btn btn-sm btn-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(RepoListAccountId) || string.IsNullOrWhiteSpace(SelectedProviderRepositoryFullName))" @onclick="LoadTrafficForSelectedRepoAsync">
+                                    <i class="fa-duotone fa-solid fa-chart-simple"></i> Lấy traffic
+                                </button>
+                            </div>
+                            <div class="row g-2 align-items-end mb-3">
+                                <div class="col-12 col-lg-4">
+                                    <label class="form-label small">Account</label>
+                                    <select class="form-select form-select-sm" @bind="RepoListAccountId">
+                                        <option value="">-- chọn account --</option>
+                                        @foreach (var account in Accounts)
+                                        {
+                                            <option value="@account.Id">@account.Provider - @account.Name</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-12 col-lg-6">
+                                    <label class="form-label small">Repository full name</label>
+                                    <input class="form-control form-control-sm" @bind="SelectedProviderRepositoryFullName" placeholder="owner/repo" />
+                                </div>
+                                <div class="col-12 col-lg-2 d-grid">
+                                    <button class="btn btn-sm btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(RepoListAccountId))" @onclick="LoadProviderRepositoriesAsync">Repo list</button>
+                                </div>
+                            </div>
+
+                            @if (TrafficStats is null)
+                            {
+                                <div class="ct-empty-inline">Chưa có traffic. Chọn repo trong tab Repositories hoặc nhập <code>owner/repo</code> rồi bấm “Lấy traffic”.</div>
+                            }
+                            else if (!TrafficStats.Success)
+                            {
+                                <div class="alert alert-warning mb-0">@TrafficStats.Message</div>
+                            }
+                            else
+                            {
+                                <div class="git-traffic-summary mb-3">
+                                    <span>Repository: <b>@TrafficStats.RepositoryFullName</b></span>
+                                    <span>Provider: <code>@TrafficStats.Provider</code></span>
+                                    <span>@TrafficStats.Message</span>
+                                </div>
+                                <div class="git-traffic-grid">
+                                    @foreach (var metric in TrafficStats.Metrics)
+                                    {
+                                        var max = GetMetricMax(metric);
+                                        <div class="git-traffic-card">
+                                            <div class="git-traffic-card-head">
+                                                <div>
+                                                    <div class="fw-bold">@metric.Title</div>
+                                                    <div class="ct-muted small">Tổng @metric.Count — Unique @metric.Uniques</div>
+                                                </div>
+                                                <span class="git-status-badge clean">@metric.Kind</span>
+                                            </div>
+                                            @if (metric.Points.Count == 0)
+                                            {
+                                                <div class="ct-empty-inline">Chưa có điểm dữ liệu.</div>
+                                            }
+                                            else
+                                            {
+                                                <div class="git-traffic-chart">
+                                                    @foreach (var point in metric.Points)
+                                                    {
+                                                        <div class="git-traffic-point">
+                                                            <span>@point.Timestamp.ToLocalTime().ToString("MM/dd")</span>
+                                                            <div class="git-traffic-bars">
+                                                                <div class="git-traffic-bar count" style="@BuildBarStyle(point.Count, max)" title="Count: @point.Count"></div>
+                                                                <div class="git-traffic-bar unique" style="@BuildBarStyle(point.Uniques, max)" title="Unique: @point.Uniques"></div>
+                                                            </div>
+                                                            <b>@point.Count</b>
+                                                            <small>@point.Uniques</small>
+                                                        </div>
+                                                    }
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (ActiveTab == "explorer")
+                    {
+                        <div class="git-explorer-modern">
+                            <div class="git-explorer-commandbar">
+                                <div class="git-explorer-pathbox">
+                                    <i class="fa-duotone fa-solid fa-folder-tree"></i>
+                                    <div>
+                                        <div class="small ct-muted">Local path</div>
+                                        <b>@(string.IsNullOrWhiteSpace(LocalExplorerCurrentPath) ? "/" : LocalExplorerCurrentPath)</b>
+                                    </div>
+                                </div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@(Busy || ExplorerData?.CanGoParent != true)" @onclick="GoLocalExplorerParentAsync">
+                                        <i class="fa-duotone fa-solid fa-arrow-up"></i> Lên thư mục cha
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="LoadFileExplorerAsync">
+                                        <i class="fa-duotone fa-solid fa-rotate"></i> Refresh local
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="LoadRemoteExplorerFromFirstPageAsync">
+                                        <i class="fa-duotone fa-solid fa-cloud-arrow-down"></i> Refresh remote
+                                    </button>
+                                </div>
+                            </div>
+
+                            @if (ExplorerData?.Breadcrumbs.Count > 0)
+                            {
+                                <div class="git-breadcrumbs">
+                                    @foreach (var crumb in ExplorerData.Breadcrumbs)
+                                    {
+                                        <button type="button" class="git-breadcrumb" disabled="@Busy" @onclick="() => NavigateLocalExplorerAsync(crumb.RelativePath)">
+                                            @(string.IsNullOrWhiteSpace(crumb.Name) ? "Project" : crumb.Name)
+                                        </button>
+                                        @if (crumb != ExplorerData.Breadcrumbs.Last())
+                                        {
+                                            <span>/</span>
+                                        }
+                                    }
+                                </div>
+                            }
+
+                            <div class="git-explorer-main-grid">
+                                <section class="ct-mini-box git-modern-pane">
+                                    <div class="git-pane-header">
+                                        <div>
+                                            <div class="fw-bold"><i class="fa-duotone fa-solid fa-folder-open"></i> Local Explorer</div>
+                                            <div class="small ct-muted">Duyệt thư mục giống Explorer Windows, có thao tác stage và .gitignore ngay trên file.</div>
+                                        </div>
+                                        <div class="input-group input-group-sm git-search-box">
+                                            <input class="form-control" @bind="FileSearch" @bind:event="oninput" placeholder="Tìm local recursive..." />
+                                            <button class="btn btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="LoadFileExplorerFromFirstPageAsync">Tìm</button>
+                                        </div>
+                                    </div>
+
+                                    @if (ExplorerData is null)
+                                    {
+                                        <div class="ct-empty-inline">Chưa tải Local Explorer.</div>
+                                    }
+                                    else
+                                    {
+                                        <div class="git-explorer-toolbar mb-2">
+                                            <label class="form-check small mb-0">
+                                                <input class="form-check-input" type="checkbox" checked="@AreAllVisibleFilesSelected" @onchange="ToggleSelectVisibleFiles" /> Select all đang hiện
+                                            </label>
+                                            <span class="small ct-muted">Đã chọn @SelectedGitPaths.Count file/folder</span>
+                                            <button class="btn btn-sm btn-success" type="button" disabled="@(Busy || SelectedGitPaths.Count == 0)" @onclick="AddSelectedFilesAsync">
+                                                <i class="fa-duotone fa-solid fa-plus"></i> git add selected
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-success" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="AddAllFilesAsync">
+                                                <i class="fa-duotone fa-solid fa-layer-plus"></i> git add all
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@(Busy || SelectedGitPaths.Count == 0)" @onclick="ClearSelectedGitPaths">Bỏ chọn</button>
+                                        </div>
+                                        <div class="git-explorer-pager mb-2">
+                                            <div class="small ct-muted">
+                                                Trang @ExplorerData.Page/@ExplorerData.TotalPages · @ExplorerData.Items.Count/@ExplorerData.TotalCount item · @ExplorerData.IgnoredCount ignored. File ignored vẫn hiện để có thể bỏ khỏi <code>.gitignore</code>.
+                                            </div>
+                                            <div class="d-flex flex-wrap gap-2 align-items-center">
+                                                <select class="form-select form-select-sm git-page-size" @bind="ExplorerPageSize" @bind:after="LoadFileExplorerFromFirstPageAsync">
+                                                    <option value="25">25</option>
+                                                    <option value="50">50</option>
+                                                    <option value="100">100</option>
+                                                    <option value="200">200</option>
+                                                </select>
+                                                <button class="btn btn-sm btn-outline-secondary" disabled="@(Busy || ExplorerData.Page <= 1)" @onclick="PreviousExplorerPage">‹</button>
+                                                <button class="btn btn-sm btn-outline-secondary" disabled="@(Busy || ExplorerData.Page >= ExplorerData.TotalPages)" @onclick="NextExplorerPage">›</button>
+                                            </div>
+                                        </div>
+                                        <div class="git-winexplorer-list">
+                                            <div class="git-win-row git-win-head">
+                                                <span></span><span>Name</span><span>Status</span><span>Size</span><span>Modified</span><span>Last commit</span><span>Actions</span>
+                                            </div>
+                                            @foreach (var item in ExplorerData.Items)
+                                            {
+                                                <div class="git-win-row @(SelectedGitPaths.Contains(item.RelativePath) ? "selected" : null) @(item.IsIgnored ? "ignored" : null)">
+                                                    <input class="form-check-input" type="checkbox" disabled="@(!item.CanStage)" checked="@SelectedGitPaths.Contains(item.RelativePath)" @onchange="args => ToggleGitPathSelection(item.RelativePath, args)" title="Chọn để git add" />
+                                                    <button type="button" class="git-win-name" @onclick="() => OpenLocalExplorerItemAsync(item)" title="@item.RelativePath">
+                                                        <i class="fa-duotone fa-solid @(item.IsDirectory ? "fa-folder" : GetFileIcon(item.Name))"></i>
+                                                        <span>@item.Name</span>
+                                                    </button>
+                                                    <span class="git-status-badge @(item.IsIgnored ? "ignored" : string.IsNullOrWhiteSpace(item.GitStatus) ? "clean" : "dirty")">@(item.IsIgnored ? "ignored" : string.IsNullOrWhiteSpace(item.GitStatus) ? "clean" : item.GitStatus)</span>
+                                                    <small>@(item.IsDirectory ? "Folder" : FormatBytes(item.SizeBytes))</small>
+                                                    <small>@item.LastWriteTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</small>
+                                                    <small class="git-commit-text" title="@item.LastCommitMessage">@(!string.IsNullOrWhiteSpace(item.LastCommitMessage) ? item.LastCommitMessage : "-")</small>
+                                                    <div class="git-file-actions">
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" title="Preview raw" disabled="@(Busy || item.IsDirectory)" @onclick="() => PreviewLocalFileAsync(item)"><i class="fa-duotone fa-solid fa-eye"></i></button>
+                                                        <div class="git-file-menu" tabindex="0">
+                                                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Menu thao tác file local"><i class="fa-duotone fa-solid fa-ellipsis"></i></button>
+                                                            <div class="git-file-menu-panel">
+                                                                <button type="button" disabled="@(Busy || item.IsDirectory)" @onclick="() => PreviewLocalFileAsync(item)"><i class="fa-duotone fa-solid fa-eye"></i> Xem raw</button>
+                                                                <button type="button" disabled="@(Busy || !item.CanStage)" @onclick="() => AddSingleFileAsync(item)"><i class="fa-duotone fa-solid fa-plus"></i> Git add</button>
+                                                                <button type="button" disabled="@Busy" @onclick="() => OpenLocalItemAsync(item)"><i class="fa-duotone fa-solid fa-arrow-up-right-from-square"></i> Mở vị trí</button>
+                                                                <button type="button" disabled="@Busy" @onclick="() => CopyTextAsync(item.RelativePath)"><i class="fa-duotone fa-solid fa-copy"></i> Copy path</button>
+                                                                <button type="button" disabled="@Busy" @onclick="() => AddLocalItemToGitIgnoreAsync(item)"><i class="fa-duotone fa-solid fa-ban"></i> Thêm .gitignore</button>
+                                                                <button type="button" disabled="@Busy" @onclick="() => RemoveLocalItemFromGitIgnoreAsync(item)"><i class="fa-duotone fa-solid fa-unlock"></i> Bỏ khỏi .gitignore</button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </section>
+
+                                <section class="ct-mini-box git-modern-pane git-remote-modern-pane">
+                                    <div class="git-pane-header">
+                                        <div>
+                                            <div class="fw-bold"><i class="fa-duotone fa-solid fa-cloud-arrow-down"></i> Remote Git Explorer</div>
+                                            <div class="small ct-muted">Duyệt remote giống Explorer: vào folder, breadcrumb, preview raw, copy raw CDN URL và xem commit cuối.</div>
+                                        </div>
+                                        <div class="d-flex flex-wrap gap-2">
+                                            <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@(Busy || RemoteExplorerData?.CanGoParent != true)" @onclick="GoRemoteExplorerParentAsync">
+                                                <i class="fa-duotone fa-solid fa-arrow-up"></i> Lên thư mục cha
+                                            </button>
+                                            <button class="btn btn-sm btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="LoadRemoteExplorerAsync">
+                                                <i class="fa-duotone fa-solid fa-rotate"></i> Refresh remote
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div class="git-remote-path-card mb-2">
+                                        <div class="git-explorer-pathbox">
+                                            <i class="fa-duotone fa-solid fa-cloud"></i>
+                                            <div>
+                                                <div class="small ct-muted">Remote path</div>
+                                                <b>@(string.IsNullOrWhiteSpace(RemoteExplorerCurrentPath) ? "/" : RemoteExplorerCurrentPath)</b>
+                                            </div>
+                                        </div>
+                                        @if (RemoteExplorerData?.Breadcrumbs.Count > 0)
+                                        {
+                                            <div class="git-breadcrumbs git-remote-breadcrumbs">
+                                                @foreach (var crumb in RemoteExplorerData.Breadcrumbs)
+                                                {
+                                                    <button type="button" class="git-breadcrumb" disabled="@Busy" @onclick="() => NavigateRemoteExplorerAsync(crumb.RelativePath)">
+                                                        @(string.IsNullOrWhiteSpace(crumb.Name) ? "Remote" : crumb.Name)
+                                                    </button>
+                                                    @if (crumb != RemoteExplorerData.Breadcrumbs.Last())
+                                                    {
+                                                        <span>/</span>
+                                                    }
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-md-4">
+                                            <label class="form-label small">Remote</label>
+                                            <input class="form-control form-control-sm" @bind="PushRemote" placeholder="origin" />
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label small">Branch</label>
+                                            <input class="form-control form-control-sm" @bind="PushBranch" placeholder="main/master" />
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label small">Search</label>
+                                            <div class="input-group input-group-sm">
+                                                <input class="form-control" @bind="RemoteFileSearch" @bind:event="oninput" placeholder="Tìm trong remote path..." />
+                                                <button class="btn btn-outline-primary" disabled="@Busy" @onclick="LoadRemoteExplorerFromFirstPageAsync">Tìm</button>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    @if (RemoteExplorerData is null)
+                                    {
+                                        <div class="ct-empty-inline">Chưa tải Remote Git Explorer.</div>
+                                    }
+                                    else
+                                    {
+                                        <div class="git-explorer-toolbar mb-2">
+                                            <span class="small ct-muted"><i class="fa-duotone fa-solid fa-code-branch"></i> Ref <code>@RemoteExplorerData.SourceRef</code></span>
+                                            <span class="small ct-muted"><i class="fa-duotone fa-solid fa-folder"></i> @RemoteExplorerData.DirectoryCount folder</span>
+                                            <span class="small ct-muted"><i class="fa-duotone fa-solid fa-file"></i> @RemoteExplorerData.FileCount file</span>
+                                            <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@Busy" @onclick="() => CopyTextAsync(RemoteExplorerCurrentPath)">Copy path</button>
+                                        </div>
+                                        <div class="git-explorer-pager mb-2">
+                                            <div class="small ct-muted">Trang @RemoteExplorerData.Page/@RemoteExplorerData.TotalPages · @RemoteExplorerData.Items.Count/@RemoteExplorerData.TotalCount item.</div>
+                                            <div class="d-flex flex-wrap gap-2 align-items-center">
+                                                <select class="form-select form-select-sm git-page-size" @bind="RemoteExplorerPageSize" @bind:after="LoadRemoteExplorerFromFirstPageAsync">
+                                                    <option value="25">25</option>
+                                                    <option value="50">50</option>
+                                                    <option value="100">100</option>
+                                                    <option value="200">200</option>
+                                                </select>
+                                                <button class="btn btn-sm btn-outline-secondary" disabled="@(Busy || RemoteExplorerData.Page <= 1)" @onclick="PreviousRemoteExplorerPage">‹</button>
+                                                <button class="btn btn-sm btn-outline-secondary" disabled="@(Busy || RemoteExplorerData.Page >= RemoteExplorerData.TotalPages)" @onclick="NextRemoteExplorerPage">›</button>
+                                            </div>
+                                        </div>
+                                        <div class="git-winexplorer-list remote modern-remote">
+                                            <div class="git-win-row git-win-head remote modern-remote">
+                                                <span>Type</span><span>Name</span><span>Size</span><span>Object</span><span>Last commit</span><span>Commit date</span><span>Actions</span>
+                                            </div>
+                                            @foreach (var item in RemoteExplorerData.Items)
+                                            {
+                                                <div class="git-win-row remote modern-remote @(item.ObjectType == "tree" ? "folder" : "file")">
+                                                    <span class="git-status-badge clean">@(item.ObjectType == "tree" ? "folder" : "file")</span>
+                                                    <button type="button" class="git-win-name" disabled="@Busy" @onclick="() => OpenRemoteExplorerItemAsync(item)" title="@item.Path">
+                                                        <i class="fa-duotone fa-solid @(item.ObjectType == "tree" ? "fa-folder" : GetFileIcon(item.Name))"></i>
+                                                        <span>@item.Name</span>
+                                                    </button>
+                                                    <small>@(item.ObjectType == "tree" ? "Folder" : FormatBytes(item.SizeBytes))</small>
+                                                    <small title="@item.ObjectId">@TrimMiddle(item.ObjectId, 16)</small>
+                                                    <small class="git-commit-text" title="@item.LastCommitMessage">@(!string.IsNullOrWhiteSpace(item.LastCommitMessage) ? item.LastCommitMessage : "-")</small>
+                                                    <small>@(item.LastCommitAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "-")</small>
+                                                    <div class="git-file-actions">
+                                                        <button class="btn btn-sm btn-outline-primary" title="@(item.ObjectType == "tree" ? "Vào folder" : "Preview raw")" disabled="@Busy" @onclick="() => OpenRemoteExplorerItemAsync(item)">
+                                                            <i class="fa-duotone fa-solid @(item.ObjectType == "tree" ? "fa-folder-open" : "fa-eye")"></i>
+                                                        </button>
+                                                        <div class="git-file-menu" tabindex="0">
+                                                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Menu thao tác remote"><i class="fa-duotone fa-solid fa-ellipsis"></i></button>
+                                                            <div class="git-file-menu-panel align-end">
+                                                                <button type="button" disabled="@Busy" @onclick="() => OpenRemoteExplorerItemAsync(item)"><i class="fa-duotone fa-solid @(item.ObjectType == "tree" ? "fa-folder-open" : "fa-eye")"></i> @(item.ObjectType == "tree" ? "Mở folder" : "Xem raw")</button>
+                                                                <button type="button" disabled="@Busy" @onclick="() => CopyTextAsync(item.Path)"><i class="fa-duotone fa-solid fa-copy"></i> Copy path</button>
+                                                                <button type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(item.RawUrl))" @onclick="() => CopyTextAsync(item.RawUrl)"><i class="fa-duotone fa-solid fa-link"></i> Copy raw URL</button>
+                                                                <button type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(item.RawUrl))" @onclick="() => PreviewRemoteFileAsync(item)"><i class="fa-duotone fa-solid fa-code"></i> Raw/CDN preview</button>
+                                                                <button type="button" disabled="@Busy" @onclick="() => CopyTextAsync(item.ObjectId)"><i class="fa-duotone fa-solid fa-fingerprint"></i> Copy object id</button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                </section>
+                            </div>
+
+                            <section class="ct-mini-box git-raw-preview-panel">
+                                <div class="git-pane-header">
+                                    <div>
+                                        <div class="fw-bold"><i class="fa-duotone fa-solid fa-file-code"></i> Raw preview / CDN link</div>
+                                        <div class="small ct-muted">Click file local/remote để xem raw. Remote GitHub/GitLab sẽ hiện raw URL có thể nhúng làm CDN.</div>
+                                    </div>
+                                    @if (SelectedFilePreview is not null)
+                                    {
+                                        <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="ClearSelectedFilePreview">Đóng preview</button>
+                                    }
+                                </div>
+                                @if (SelectedFilePreview is null)
+                                {
+                                    <div class="ct-empty-inline">Chưa chọn file raw để preview.</div>
+                                }
+                                else
+                                {
+                                    <div class="git-raw-meta">
+                                        <span class="badge text-bg-primary">@(SelectedFilePreview.IsRemote ? "remote" : "local")</span>
+                                        <b>@SelectedFilePreview.RelativePath</b>
+                                        <span>@FormatBytes(SelectedFilePreview.SizeBytes)</span>
+                                        <span>@SelectedFilePreview.Language</span>
+                                        @if (SelectedFilePreview.IsTruncated)
+                                        {
+                                            <span class="badge text-bg-warning">truncated</span>
+                                        }
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(SelectedFilePreview.RawUrl))
+                                    {
+                                        <div class="input-group input-group-sm mb-2">
+                                            <span class="input-group-text">Raw URL</span>
+                                            <input class="form-control" value="@SelectedFilePreview.RawUrl" readonly />
+                                            <button class="btn btn-outline-primary" type="button" @onclick="() => CopyTextAsync(SelectedFilePreview.RawUrl)">Copy</button>
+                                        </div>
+                                    }
+                                    @if (!SelectedFilePreview.Success)
+                                    {
+                                        <div class="alert alert-danger small">@SelectedFilePreview.Message</div>
+                                    }
+                                    <pre class="git-raw-content">@SelectedFilePreview.Content</pre>
+                                }
+                            </section>
+                        </div>
+                    }
+                    else if (ActiveTab == "ignore")
+                    {
+                        <div class="ct-mini-box">
+                            <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center mb-2">
+                                <div class="fw-bold"><i class="fa-duotone fa-solid fa-file-slash"></i> .gitignore</div>
+                                <div class="d-flex gap-2">
+                                    <button class="btn btn-sm btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="LoadGitIgnoreAsync">Đọc</button>
+                                    <button class="btn btn-sm btn-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="SaveGitIgnoreAsync">Lưu</button>
+                                </div>
+                            </div>
+                            <textarea class="form-control gitignore-editor" @bind="GitIgnoreText" spellcheck="false" placeholder="bin/&#10;obj/&#10;.vs/"></textarea>
+                        </div>
+                    }
+
+                    else if (ActiveTab == "config")
+                    {
+                        <div class="ct-mini-box">
+                            <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center mb-2">
+                                <div>
+                                    <div class="fw-bold"><i class="fa-duotone fa-solid fa-gears"></i> Đọc cấu hình .git / .github</div>
+                                    <div class="ct-muted small">Đọc an toàn các file cấu hình như <code>.git/config</code>, <code>.git/HEAD</code>, <code>.gitmodules</code>, <code>.github/workflows/*.yml</code>, template issue/PR nếu có.</div>
+                                </div>
+                                <button class="btn btn-sm btn-outline-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ProjectFolder))" @onclick="LoadGitConfigFilesAsync">
+                                    <i class="fa-duotone fa-solid fa-rotate"></i> Đọc lại
+                                </button>
+                            </div>
+
+                            @if (GitConfigFiles is null)
+                            {
+                                <div class="ct-empty-inline">Chưa đọc cấu hình Git. Bấm “Đọc lại” hoặc chọn project folder.</div>
+                            }
+                            else if (GitConfigFiles.Files.Count == 0)
+                            {
+                                <div class="ct-empty-inline">Không tìm thấy file cấu hình .git/.github trong thư mục này.</div>
+                            }
+                            else
+                            {
+                                <div class="input-group input-group-sm git-search-box mb-2">
+                                    <span class="input-group-text"><i class="fa-duotone fa-solid fa-magnifying-glass"></i></span>
+                                    <input class="form-control" @bind="GitConfigSearch" @bind:event="oninput" placeholder="Tìm file/nội dung config .git/.github..." />
+                                    @if (!string.IsNullOrWhiteSpace(GitConfigSearch))
+                                    {
+                                        <button class="btn btn-outline-secondary" type="button" title="Xóa tìm kiếm config" @onclick="ClearGitConfigSearch">×</button>
+                                    }
+                                </div>
+                                <div class="git-config-browser">
+                                    <div class="git-config-file-list">
+                                        @foreach (var file in FilteredGitConfigFiles)
+                                        {
+                                            <button type="button" class="git-config-file-row @(SelectedGitConfigPath == file.RelativePath ? "active" : null)" @onclick="() => SelectGitConfigFile(file)">
+                                                <span class="git-config-source @file.Source">@file.Source</span>
+                                                <b>@file.DisplayName</b>
+                                                <small>@file.RelativePath</small>
+                                                @if (file.IsTruncated)
+                                                {
+                                                    <span class="badge text-bg-warning">truncated</span>
+                                                }
+                                            </button>
+                                        }
+                                    </div>
+                                    <div class="git-config-content-panel">
+                                        @if (SelectedGitConfigFile is null)
+                                        {
+                                            <div class="ct-empty-inline">Chọn một file cấu hình bên trái để xem nội dung.</div>
+                                        }
+                                        else
+                                        {
+                                            <div class="d-flex flex-wrap justify-content-between gap-2 align-items-start mb-2">
+                                                <div>
+                                                    <div class="fw-bold">@SelectedGitConfigFile.RelativePath</div>
+                                                    <div class="ct-muted small">@SelectedGitConfigFile.FullPath</div>
+                                                </div>
+                                                <span class="badge text-bg-light">@FormatBytes(SelectedGitConfigFile.SizeBytes)</span>
+                                            </div>
+                                            <pre class="git-config-content">@SelectedGitConfigFile.Content</pre>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else if (ActiveTab == "workspaces")
+                    {
+                        <div class="ct-mini-box">
+                            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                                <div>
+                                    <div class="fw-bold"><i class="fa-duotone fa-solid fa-layer-group"></i> Multi actions account / repo / branch</div>
+                                    <div class="small ct-muted">Mỗi workspace map 1 account + repo + branch + thư mục local. Lưu trong <code>gitconfig.json</code>.</div>
+                                </div>
+                                <button class="btn btn-sm btn-outline-primary" type="button" disabled="@Busy" @onclick="LoadWorkspacesAsync">Reload</button>
+                            </div>
+                            <div class="row g-2 mb-3">
+                                <div class="col-12 col-lg-3">
+                                    <label class="form-label small">Account</label>
+                                    <select class="form-select form-select-sm" @bind="WorkspaceForm.AccountId">
+                                        <option value="">-- account --</option>
+                                        @foreach (var account in Accounts)
+                                        {
+                                            <option value="@account.Id">@account.Provider - @account.Name</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-12 col-lg-3">
+                                    <label class="form-label small">Repo full name</label>
+                                    <input class="form-control form-control-sm" @bind="WorkspaceForm.RepositoryFullName" placeholder="owner/repo" />
+                                </div>
+                                <div class="col-12 col-lg-2">
+                                    <label class="form-label small">Branch</label>
+                                    <input class="form-control form-control-sm" @bind="WorkspaceForm.BranchName" placeholder="main" />
+                                </div>
+                                <div class="col-12 col-lg-4">
+                                    <label class="form-label small">Local folder</label>
+                                    <div class="input-group input-group-sm">
+                                        <input class="form-control" @bind="WorkspaceForm.FolderPath" placeholder="D:\LapTrinh\repo" />
+                                        <button class="btn btn-outline-secondary" disabled="@Busy" @onclick="PickWorkspaceFolderAsync">Chọn</button>
+                                    </div>
+                                </div>
+                                <div class="col-12 col-lg-3">
+                                    <label class="form-label small">Clone URL</label>
+                                    <input class="form-control form-control-sm" @bind="WorkspaceForm.CloneUrl" />
+                                </div>
+                                <div class="col-12 col-lg-2">
+                                    <label class="form-label small">Remote</label>
+                                    <input class="form-control form-control-sm" @bind="WorkspaceForm.RemoteName" placeholder="origin" />
+                                </div>
+                                <div class="col-12 col-lg-7 d-flex flex-wrap gap-2 align-items-end">
+                                    <button class="btn btn-sm btn-primary" disabled="@(Busy || string.IsNullOrWhiteSpace(WorkspaceForm.AccountId) || string.IsNullOrWhiteSpace(WorkspaceForm.RepositoryFullName))" @onclick="SaveWorkspaceAsync">Lưu workspace</button>
+                                    <button class="btn btn-sm btn-outline-secondary" disabled="@Busy" @onclick="ResetWorkspaceForm">New form</button>
+                                    <button class="btn btn-sm btn-outline-success" disabled="@(Busy || SelectedWorkspaceIds.Count == 0)" @onclick='() => RunWorkspaceActionAsync("status")'>Status selected</button>
+                                    <button class="btn btn-sm btn-outline-primary" disabled="@(Busy || SelectedWorkspaceIds.Count == 0)" @onclick='() => RunWorkspaceActionAsync("pull")'>Pull selected</button>
+                                    <button class="btn btn-sm btn-outline-primary" disabled="@(Busy || SelectedWorkspaceIds.Count == 0)" @onclick='() => RunWorkspaceActionAsync("push")'>Push selected</button>
+                                    <button class="btn btn-sm btn-outline-warning" disabled="@(Busy || SelectedWorkspaceIds.Count == 0)" @onclick='() => RunWorkspaceActionAsync("clone")'>Clone selected</button>
+                                </div>
+                            </div>
+                            <div class="input-group input-group-sm git-search-box mb-2">
+                                <span class="input-group-text"><i class="fa-duotone fa-solid fa-magnifying-glass"></i></span>
+                                <input class="form-control" @bind="WorkspaceSearch" @bind:event="oninput" placeholder="Tìm workspace theo account/repo/branch/folder..." />
+                                @if (!string.IsNullOrWhiteSpace(WorkspaceSearch))
+                                {
+                                    <button class="btn btn-outline-secondary" type="button" title="Xóa tìm kiếm workspace" @onclick="ClearWorkspaceSearch">×</button>
+                                }
+                            </div>
+                            <div class="git-workspace-list">
+                                @if (FilteredWorkspaces.Count == 0)
+                                {
+                                    <div class="ct-empty-inline">Chưa có workspace hoặc không khớp tìm kiếm. Chọn repo ở tab Repositories rồi bấm Map folder, hoặc nhập thủ công ở form trên.</div>
+                                }
+                                @foreach (var ws in FilteredWorkspaces)
+                                {
+                                    <div class="git-workspace-row @(SelectedWorkspaceIds.Contains(ws.Id) ? "selected" : null)">
+                                        <input class="form-check-input" type="checkbox" checked="@SelectedWorkspaceIds.Contains(ws.Id)" @onchange="args => ToggleWorkspaceSelection(ws.Id, args)" />
+                                        <div>
+                                            <b>@ws.RepositoryFullName</b>
+                                            <div class="small ct-muted">@ws.Provider / @ws.AccountName · branch <code>@ws.BranchName</code> · remote <code>@ws.RemoteName</code></div>
+                                            <small>@ws.FolderPath</small>
+                                        </div>
+                                        <div class="d-flex flex-wrap gap-2 justify-content-end">
+                                            <button class="btn btn-sm btn-outline-primary" disabled="@Busy" @onclick="() => EditWorkspace(ws)">Sửa</button>
+                                            <button class="btn btn-sm btn-outline-secondary" disabled="@Busy" @onclick="() => UseWorkspaceFolderAsync(ws)">Dùng folder</button>
+                                            <button class="btn btn-sm btn-outline-danger" disabled="@Busy" @onclick="() => DeleteWorkspaceAsync(ws)">Xóa</button>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                    else if (ActiveTab == "oauthsettings")
+                    {
+                        <div class="ct-mini-box">
+                            <div class="fw-bold mb-2"><i class="fa-duotone fa-solid fa-key"></i> OAuth2 callback settings</div>
+                            <div class="small ct-muted mb-3">Lưu tại <code>config/OAuth2.json</code>. Git account modal sẽ dùng port này làm callback mặc định.</div>
+                            <div class="row g-2 align-items-end">
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label small">Callback port</label>
+                                    <input class="form-control" type="number" min="1024" max="65535" @bind="OAuth2Settings.CallbackPort" />
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <label class="form-label small">Callback path</label>
+                                    <input class="form-control" @bind="OAuth2Settings.CallbackPath" />
+                                </div>
+                                <div class="col-12 col-md-4">
+                                    <button class="btn btn-primary" disabled="@Busy" @onclick="SaveOAuth2SettingsAsync">Lưu OAuth2.json</button>
+                                </div>
+                            </div>
+                            <div class="alert alert-info small mt-3 mb-0">Callback URL hiện tại: <code>http://127.0.0.1:@OAuth2Settings.CallbackPort@(string.IsNullOrWhiteSpace(OAuth2Settings.CallbackPath) ? "/callback" : OAuth2Settings.CallbackPath)</code></div>
+                        </div>
+                    }
+
+                    else if (ActiveTab == "clone")
+                    {
+                        <div class="row g-3">
+                            <div class="col-12 col-lg-6">
+                                <div class="ct-mini-box h-100">
+                                    <div class="fw-bold mb-2"><i class="fa-duotone fa-solid fa-download"></i> Git clone</div>
+                                    <div class="input-group input-group-sm mb-2">
+                                        <span class="input-group-text">Folder</span>
+                                        <input class="form-control" @bind="CloneParentFolder" placeholder="D:\LapTrinh" />
+                                        <button class="btn btn-outline-primary" type="button" disabled="@Busy" @onclick="PickCloneFolderAsync">Chọn</button>
+                                    </div>
+                                    <label class="form-label small">Repository URL</label>
+                                    <input class="form-control form-control-sm mb-2" @bind="CloneUrl" placeholder="https://github.com/user/repo.git" />
+                                    <label class="form-label small">Tên thư mục con, có thể bỏ trống</label>
+                                    <input class="form-control form-control-sm mb-2" @bind="CloneTargetName" placeholder="repo-name" />
+                                    <button class="btn btn-sm btn-success" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(CloneParentFolder) || string.IsNullOrWhiteSpace(CloneUrl))" @onclick="CloneAsync">
+                                        <i class="fa-duotone fa-solid fa-cloud-arrow-down"></i> Clone về thư mục chọn sẵn
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <div class="ct-mini-box h-100">
+                                    <div class="fw-bold mb-2"><i class="fa-duotone fa-solid fa-cloud-plus"></i> Tạo repository mới</div>
+                                    <label class="form-label small">Account</label>
+                                    <select class="form-select form-select-sm mb-2" @bind="CreateRepoAccountId">
+                                        <option value="">-- chọn account --</option>
+                                        @foreach (var account in Accounts)
+                                        {
+                                            <option value="@account.Id">@account.Provider - @account.Name</option>
+                                        }
+                                    </select>
+                                    <label class="form-label small">Tên repository</label>
+                                    <input class="form-control form-control-sm mb-2" @bind="CreateRepoName" placeholder="my-project" />
+                                    <label class="form-label small">Mô tả</label>
+                                    <input class="form-control form-control-sm mb-2" @bind="CreateRepoDescription" />
+                                    <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                                        <select class="form-select form-select-sm git-small-select" @bind="CreateRepoVisibility">
+                                            <option value="private">private</option>
+                                            <option value="public">public</option>
+                                        </select>
+                                        <label class="form-check small m-0"><input class="form-check-input" type="checkbox" @bind="CreateRepoReadme" /> README</label>
+                                    </div>
+                                    <div class="d-flex flex-wrap gap-2">
+                                        <button class="btn btn-sm btn-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(CreateRepoAccountId) || string.IsNullOrWhiteSpace(CreateRepoName))" @onclick="CreateRepositoryAsync">
+                                            <i class="fa-duotone fa-solid fa-plus"></i> Tạo repository
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-primary" type="button" disabled="@(Busy || SelectedGitAccountIds.Count == 0 || string.IsNullOrWhiteSpace(CreateRepoName))" @onclick="CreateRepositoryForSelectedAccountsAsync">
+                                            <i class="fa-duotone fa-solid fa-layer-plus"></i> Tạo trên @SelectedGitAccountIds.Count account
+                                        </button>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(LastCreatedCloneUrl))
+                                    {
+                                        <div class="alert alert-success mt-2 mb-0 small">
+                                            Clone URL: <code>@LastCreatedCloneUrl</code>
+                                            <button class="btn btn-sm btn-outline-success ms-2" type="button" @onclick="UseCreatedRepoAsRemote">Dùng làm remote</button>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+                    else if (ActiveTab == "scan")
+                    {
+                        <div class="ct-mini-box">
+                            <div class="fw-bold mb-2"><i class="fa-duotone fa-solid fa-magnifying-glass"></i> Tìm project đã git init</div>
+                            <div class="row g-2 mb-2">
+                                <div class="col-12 col-lg-7">
+                                    <input class="form-control form-control-sm" @bind="ScanRootFolder" placeholder="D:\LapTrinh" />
+                                </div>
+                                <div class="col-12 col-lg-3">
+                                    <input class="form-control form-control-sm" @bind="ScanKeyword" placeholder="keyword" />
+                                </div>
+                                <div class="col-12 col-lg-2 d-grid">
+                                    <button class="btn btn-sm btn-primary" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(ScanRootFolder))" @onclick="FindRepositoriesAsync">Scan</button>
+                                </div>
+                            </div>
+                            <div class="git-mini-list">
+                                @foreach (var repo in FoundRepositories)
+                                {
+                                    <button type="button" class="git-mini-row" @onclick="() => UseFoundRepositoryAsync(repo)">
+                                        <b>@repo.Name</b>
+                                        <small>@repo.FolderPath</small>
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <section class="card border-0 shadow-sm ct-panel mt-3">
+        <div class="card-body p-3 p-lg-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                <div>
+                    <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-terminal"></i> Console log</h2>
+                    <div class="input-group input-group-sm git-search-box git-console-search">
+                        <span class="input-group-text"><i class="fa-duotone fa-solid fa-magnifying-glass"></i></span>
+                        <input class="form-control" @bind="ConsoleSearch" @bind:event="oninput" placeholder="Tìm log theo scope/message..." />
+                        @if (!string.IsNullOrWhiteSpace(ConsoleSearch))
+                        {
+                            <button class="btn btn-outline-secondary" type="button" title="Xóa tìm kiếm log" @onclick="ClearConsoleSearch">×</button>
+                        }
+                    </div>
+                </div>
+                <div class="d-flex gap-2">
+                    @if (!string.IsNullOrWhiteSpace(BusyText))
+                    {
+                        <span class="badge text-bg-warning"><span class="spinner-border spinner-border-sm me-1"></span>@BusyText</span>
+                    }
+                    <button class="btn btn-sm btn-outline-warning" type="button" disabled="@(!Busy || CancelRequested)" @onclick="CancelCurrentGitTabAsync">Hủy</button>
+                    <button class="btn btn-sm btn-outline-danger" type="button" disabled="@(!Busy || CancelRequested)" @onclick="CancelAllGitActionsAsync">Hủy tất cả</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" @onclick="ClearLogs">Clear</button>
+                </div>
+            </div>
+            <div class="git-console">
+                @if (FilteredLogs.Count == 0)
+                {
+                    <div class="ct-muted small">Console trống. Chạy lệnh Git để theo dõi realtime.</div>
+                }
+                @foreach (var log in FilteredLogs)
+                {
+                    <div class="git-console-line @log.Level">
+                        <span>@log.Time.ToLocalTime().ToString("HH:mm:ss")</span>
+                        <b>@log.Scope</b>
+                        <code>@log.Message</code>
+                    </div>
+                }
+            </div>
+        </div>
+    </section>
+
+    @if (ShowAccountModal)
+    {
+        <div class="ct-modal-shell" role="presentation" @onclick="CloseAccountModal">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable" role="dialog" aria-modal="true" aria-labelledby="gitAccountModalTitle" @onclick:stopPropagation="true">
+                <div class="modal-content border-0 shadow-lg git-account-modal">
+                    <div class="modal-header">
+                        <div>
+                            <h5 class="modal-title" id="gitAccountModalTitle"><i class="fa-duotone fa-solid fa-user-gear"></i> @(EditingAccountId is null ? "Thêm Git account" : "Sửa Git account")</h5>
+                            <div class="ct-muted small">Form CRUD tài khoản GitHub/GitLab được tách vào modal để cột account bên trái gọn hơn.</div>
+                        </div>
+                        <button type="button" class="btn-close" aria-label="Close" disabled="@Busy" @onclick="CloseAccountModal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="row g-3">
+                            <div class="col-12 col-md-4">
+                                <label class="form-label small">Provider</label>
+                                <select class="form-select" @bind="AccountForm.Provider" @bind:after="NormalizeAccountDefaults">
+                                    <option value="github">GitHub</option>
+                                    <option value="gitlab">GitLab</option>
+                                </select>
+                            </div>
+                            <div class="col-12 col-md-8">
+                                <label class="form-label small">Tên hiển thị</label>
+                                <input class="form-control" @bind="AccountForm.Name" placeholder="GitHub cá nhân" />
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <label class="form-label small">Username</label>
+                                <input class="form-control" @bind="AccountForm.Username" placeholder="username" />
+                            </div>
+                            <div class="col-12 col-md-6">
+                                <label class="form-label small">Email</label>
+                                <input class="form-control" @bind="AccountForm.Email" placeholder="mail@example.com" />
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small">API base URL</label>
+                                <input class="form-control" @bind="AccountForm.ApiBaseUrl" placeholder="https://api.github.com hoặc https://gitlab.com/api/v4" />
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small">Token</label>
+                                <input class="form-control" type="password" @bind="AccountForm.Token" placeholder="GitHub PAT / GitLab token hoặc token OAuth tự lấy" />
+                                <div class="form-text d-flex flex-wrap align-items-center gap-2">
+                                    <span>Token lưu trong <code>gitconfig.json</code>.</span>
+                                    <span class="git-token-source @AccountForm.TokenSource">@(string.IsNullOrWhiteSpace(AccountForm.TokenSource) ? "manual" : AccountForm.TokenSource)</span>
+                                    @if (AccountForm.LastOAuthAt is not null)
+                                    {
+                                        <span>OAuth: @AccountForm.LastOAuthAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span>
+                                    }
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <div class="git-oauth-box">
+                                    <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center mb-2">
+                                        <div>
+                                            <div class="fw-bold"><i class="fa-duotone fa-solid fa-key"></i> OAuth lấy token tự động</div>
+                                            <div class="ct-muted xsmall">Callback URL: <code>http://127.0.0.1:@AccountForm.OAuthRedirectPort/callback</code></div>
+                                        </div>
+                                        <button class="btn btn-sm btn-success" type="button" disabled="@(Busy || string.IsNullOrWhiteSpace(AccountForm.OAuthClientId))" @onclick="StartOAuthForAccountFormAsync">
+                                            <i class="fa-duotone fa-solid fa-wand-magic-sparkles"></i> Tự OAuth lấy token
+                                        </button>
+                                    </div>
+                                    <div class="row g-2">
+                                        <div class="col-12 col-md-6">
+                                            <label class="form-label small">OAuth Client ID</label>
+                                            <input class="form-control form-control-sm" @bind="AccountForm.OAuthClientId" placeholder="Client ID" />
+                                        </div>
+                                        <div class="col-12 col-md-6">
+                                            <label class="form-label small">OAuth Client Secret</label>
+                                            <input class="form-control form-control-sm" type="password" @bind="AccountForm.OAuthClientSecret" placeholder="Secret, GitHub cần nhập; GitLab PKCE có thể bỏ trống" />
+                                        </div>
+                                        <div class="col-12 col-md-8">
+                                            <label class="form-label small">Scopes</label>
+                                            <input class="form-control form-control-sm" @bind="AccountForm.OAuthScopes" placeholder="repo read:user user:email" />
+                                        </div>
+                                        <div class="col-12 col-md-4">
+                                            <label class="form-label small">Redirect port</label>
+                                            <div class="input-group input-group-sm">
+                                                <input class="form-control" type="number" min="1024" max="65535" @bind="AccountForm.OAuthRedirectPort" />
+                                                <button class="btn btn-outline-secondary" type="button" disabled="@Busy" @onclick="UseGlobalOAuthPortInAccountForm">Dùng OAuth2.json</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-check small m-0">
+                                    <input class="form-check-input" type="checkbox" @bind="AccountForm.IsDefault" /> Đặt làm account mặc định
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer d-flex justify-content-between gap-2">
+                        <button class="btn btn-outline-secondary" type="button" disabled="@Busy" @onclick="ResetAccountFormInModal">
+                            <i class="fa-duotone fa-solid fa-rotate-left"></i> Reset form
+                        </button>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-light" type="button" disabled="@Busy" @onclick="CloseAccountModal">Đóng</button>
+                            <button class="btn btn-primary" type="button" disabled="@Busy" @onclick="SaveAccountAsync">
+                                <i class="fa-duotone fa-solid fa-floppy-disk"></i> Lưu account
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-backdrop fade show"></div>
+    }
+</div>
+
+@code {
+    private HubConnection? Hub;
+    private bool HubReady;
+    private bool Busy;
+    private bool CancelRequested;
+    private string? CurrentBusyScope;
+    private string? BusyText;
+    private string? StatusMessage;
+    private bool StatusIsError;
+    private string GitConfigPath = string.Empty;
+    private List<GitAccountDto> Accounts = [];
+    private string? SelectedAccountId;
+    private string? EditingAccountId;
+    private GitAccountDto AccountForm = NewAccount();
+    private bool ShowAccountModal;
+    private GitAccountDto? SelectedAccount => Accounts.FirstOrDefault(x => x.Id == SelectedAccountId);
+    private string ProjectFolder = string.Empty;
+    private GitRepositoryStatusDto? Repository;
+    private string ActiveTab = "commands";
+    private string AccountSearch = string.Empty;
+    private string BranchSearch = string.Empty;
+    private string GitConfigSearch = string.Empty;
+    private string WorkspaceSearch = string.Empty;
+    private string ConsoleSearch = string.Empty;
+    private string RemoteName = "origin";
+    private string RemoteUrl = string.Empty;
+    private string CommitMessage = string.Empty;
+    private bool StageAll = true;
+    private string PushRemote = "origin";
+    private string PushBranch = string.Empty;
+    private bool PullRebase;
+    private string NewBranchName = string.Empty;
+    private string FileSearch = string.Empty;
+    private string RemoteFileSearch = string.Empty;
+    private string RepoListAccountId = string.Empty;
+    private string RepoListSearch = string.Empty;
+    private GitRepositoryListResponseDto? ProviderRepositories;
+    private string? SelectedProviderRepositoryFullName;
+    private string? SelectedProviderRepositoryId;
+    private GitProviderRepositoryDto? SelectedProviderRepository => ProviderRepositories?.Items.FirstOrDefault(x => string.Equals(x.FullName, SelectedProviderRepositoryFullName, StringComparison.OrdinalIgnoreCase));
+    private GitTrafficStatsDto? TrafficStats;
+    private GitFileExplorerDto? ExplorerData;
+    private GitRemoteExplorerDto? RemoteExplorerData;
+    private GitFilePreviewDto? SelectedFilePreview;
+    private string LocalExplorerCurrentPath = string.Empty;
+    private int ExplorerPage = 1;
+    private int ExplorerPageSize = 50;
+    private int RemoteExplorerPage = 1;
+    private int RemoteExplorerPageSize = 50;
+    private string RemoteExplorerCurrentPath = string.Empty;
+    private bool _disposed;
+    private GitProjectConfigSnapshotDto? GitConfigFiles;
+    private string? SelectedGitConfigPath;
+    private GitProjectConfigFileDto? SelectedGitConfigFile => FilteredGitConfigFiles.FirstOrDefault(x => x.RelativePath == SelectedGitConfigPath) ?? FilteredGitConfigFiles.FirstOrDefault();
+    private string GitIgnoreText = string.Empty;
+    private string CloneParentFolder = string.Empty;
+    private string CloneUrl = string.Empty;
+    private string? CloneTargetName;
+    private string CreateRepoAccountId = string.Empty;
+    private string CreateRepoName = string.Empty;
+    private string CreateRepoDescription = string.Empty;
+    private string CreateRepoVisibility = "private";
+    private bool CreateRepoReadme;
+    private string LastCreatedCloneUrl = string.Empty;
+    private string ScanRootFolder = string.Empty;
+    private string ScanKeyword = string.Empty;
+    private List<GitRepositorySearchResultDto> FoundRepositories = [];
+    private readonly List<GitConsoleEntryDto> Logs = [];
+    private readonly HashSet<string> SelectedGitPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> SelectedGitAccountIds = new(StringComparer.OrdinalIgnoreCase);
+    private GitBatchAccountActionResponseDto BatchResults = new();
+    private GitOAuth2ConfigDto OAuth2Settings = new();
+    private List<GitWorkspaceDto> Workspaces = [];
+    private GitWorkspaceDto WorkspaceForm = NewWorkspace();
+    private readonly HashSet<string> SelectedWorkspaceIds = new(StringComparer.OrdinalIgnoreCase);
+    private bool AreAllVisibleFilesSelected => ExplorerData?.Items.Any(x => x.CanStage) == true && ExplorerData.Items.Where(x => x.CanStage).All(x => SelectedGitPaths.Contains(x.RelativePath));
+    private const int AccountsPageSize = 8;
+    private int AccountPage = 1;
+    private List<GitAccountDto> FilteredAccounts => FilterGitAccounts().ToList();
+    private int AccountTotalPages => Math.Max(1, (int)Math.Ceiling(FilteredAccounts.Count / (double)AccountsPageSize));
+    private IEnumerable<GitAccountDto> PagedAccounts => FilteredAccounts.Skip((Math.Clamp(AccountPage, 1, AccountTotalPages) - 1) * AccountsPageSize).Take(AccountsPageSize);
+    private IEnumerable<GitBranchDto> FilteredRepositoryBranches => FilterBranches();
+    private List<GitProjectConfigFileDto> FilteredGitConfigFiles => FilterGitConfigFiles().ToList();
+    private List<GitWorkspaceDto> FilteredWorkspaces => FilterWorkspaces().ToList();
+    private List<GitConsoleEntryDto> FilteredLogs => FilterLogs().ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await SignalRHost.EnsureStartedAsync();
+        Hub = new HubConnectionBuilder()
+            .WithUrl(SignalRHost.HubUrl)
+            .WithAutomaticReconnect()
+            .Build();
+
+        Hub.On<GitConsoleEntryDto>("GitConsoleEntry", entry =>
+        {
+            if (_disposed)
+            {
+                return Task.CompletedTask;
+            }
+
+            AddLog(entry);
+            return SafeStateHasChangedAsync();
+        });
+        Hub.On<string>("GitConfigChanged", async _ =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                await ReloadConfigAsync();
+                await SafeStateHasChangedAsync();
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        });
+
+        try
+        {
+            await Hub.StartAsync();
+            if (_disposed)
+            {
+                return;
+            }
+
+            HubReady = true;
+            await ReloadAllAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            HubReady = false;
+        }
+        catch (ObjectDisposedException)
+        {
+            HubReady = false;
+        }
+        catch (Exception ex)
+        {
+            HubReady = false;
+            SetStatus("Không khởi động được Git hub: " + ex.Message, true);
+        }
+    }
+
+    private async Task ReloadAllAsync()
+    {
+        await RunUiAsync("Đang tải Git config...", async () =>
+        {
+            await ReloadConfigAsync();
+            await LoadOAuth2SettingsCoreAsync();
+            await LoadWorkspacesCoreAsync();
+            if (!string.IsNullOrWhiteSpace(ProjectFolder))
+            {
+                await RefreshRepositoryCoreAsync();
+                await LoadFileExplorerCoreAsync();
+            }
+        });
+    }
+
+    private async Task ReloadConfigAsync()
+    {
+        var hub = RequireHub();
+        var response = await hub.InvokeAsync<GitConfigResponseDto>("GetGitConfigAsync");
+        GitConfigPath = response.ConfigFilePath;
+        Accounts = response.Config.Accounts.OrderByDescending(x => x.IsDefault).ThenBy(x => x.Provider).ThenBy(x => x.Name).ToList();
+        ClampAccountPage();
+        if (SelectedAccountId is not null && Accounts.All(x => x.Id != SelectedAccountId))
+        {
+            SelectedAccountId = null;
+        }
+        SelectedGitAccountIds.RemoveWhere(id => Accounts.All(x => !string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase)));
+        SelectedAccountId ??= Accounts.FirstOrDefault(x => x.IsDefault)?.Id ?? Accounts.FirstOrDefault()?.Id;
+        CreateRepoAccountId = string.IsNullOrWhiteSpace(CreateRepoAccountId) ? SelectedAccountId ?? string.Empty : CreateRepoAccountId;
+        RepoListAccountId = string.IsNullOrWhiteSpace(RepoListAccountId) ? SelectedAccountId ?? string.Empty : RepoListAccountId;
+        ProjectFolder = string.IsNullOrWhiteSpace(ProjectFolder) ? response.Config.LastProjectFolder ?? string.Empty : ProjectFolder;
+        CloneParentFolder = string.IsNullOrWhiteSpace(CloneParentFolder) ? response.Config.LastCloneFolder ?? string.Empty : CloneParentFolder;
+        ScanRootFolder = string.IsNullOrWhiteSpace(ScanRootFolder) ? ProjectFolder : ScanRootFolder;
+    }
+
+    private async Task PickProjectFolderAsync()
+    {
+        try
+        {
+            var folder = await FolderPicker.PickFolderAsync("Chọn thư mục dự án Git", "Chọn project");
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                ProjectFolder = folder;
+                await UseProjectFolderAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Không mở được folder dialog: " + ex.Message, true);
+        }
+    }
+
+    private async Task UseProjectFolderAsync()
+    {
+        await RunUiAsync("Đang chọn project...", async () =>
+        {
+            var hub = RequireHub();
+            await hub.InvokeAsync<GitActionResultDto>("SaveGitProjectFolderAsync", ProjectFolder);
+            await RefreshRepositoryCoreAsync();
+            await LoadGitIgnoreCoreAsync();
+            await LoadFileExplorerCoreAsync();
+            await LoadGitConfigFilesCoreAsync();
+            ScanRootFolder = ProjectFolder;
+        });
+    }
+
+    private async Task OpenProjectFolderAsync()
+    {
+        var result = await Explorer.OpenFolderAsync(ProjectFolder);
+        SetStatus(result.Message, !result.Success);
+    }
+
+    private void SelectAccount(GitAccountDto account)
+    {
+        SelectedAccountId = account.Id;
+        CreateRepoAccountId = account.Id;
+        RepoListAccountId = account.Id;
+    }
+
+    private void ToggleGitAccountSelection(string accountId, ChangeEventArgs args)
+    {
+        var selected = args.Value is bool b ? b : bool.TryParse(args.Value?.ToString(), out var parsed) && parsed;
+        if (selected)
+        {
+            SelectedGitAccountIds.Add(accountId);
+        }
+        else
+        {
+            SelectedGitAccountIds.Remove(accountId);
+        }
+    }
+
+    private void SelectVisibleGitAccounts()
+    {
+        foreach (var account in PagedAccounts)
+        {
+            SelectedGitAccountIds.Add(account.Id);
+        }
+    }
+
+    private void SelectAllGitAccounts()
+    {
+        foreach (var account in Accounts)
+        {
+            SelectedGitAccountIds.Add(account.Id);
+        }
+    }
+
+    private void ClearSelectedGitAccounts()
+    {
+        SelectedGitAccountIds.Clear();
+    }
+
+    private List<string> GetRepoActionAccountIds()
+    {
+        if (SelectedGitAccountIds.Count > 0)
+        {
+            return SelectedGitAccountIds.ToList();
+        }
+
+        return string.IsNullOrWhiteSpace(RepoListAccountId) ? [] : [RepoListAccountId];
+    }
+
+    private void OpenCreateAccountModal()
+    {
+        EditingAccountId = null;
+        AccountForm = NewAccount();
+        AccountForm.OAuthRedirectPort = OAuth2Settings.CallbackPort <= 0 ? 53682 : OAuth2Settings.CallbackPort;
+        ShowAccountModal = true;
+    }
+
+    private void EditAccount(GitAccountDto account)
+    {
+        EditingAccountId = account.Id;
+        AccountForm = CloneAccount(account);
+        ShowAccountModal = true;
+    }
+
+    private void CloseAccountModal()
+    {
+        if (Busy)
+        {
+            return;
+        }
+
+        ShowAccountModal = false;
+    }
+
+    private async Task SaveAccountAsync()
+    {
+        await RunUiAsync("Đang lưu account...", async () =>
+        {
+            var hub = RequireHub();
+            if (string.IsNullOrWhiteSpace(EditingAccountId) && string.IsNullOrWhiteSpace(AccountForm.Id))
+            {
+                AccountForm.Id = Guid.NewGuid().ToString("N");
+            }
+
+            var result = await hub.InvokeAsync<GitActionResultDto>("SaveGitAccountAsync", AccountForm);
+            SetStatus(result.Message, !result.Success);
+            if (result.Success)
+            {
+                SelectedAccountId = AccountForm.Id;
+                ResetAccountForm();
+                ShowAccountModal = false;
+                await ReloadConfigAsync();
+            }
+        }, "account");
+    }
+
+    private async Task DeleteAccountAsync(GitAccountDto account)
+    {
+        await RunUiAsync("Đang xóa account...", async () =>
+        {
+            var hub = RequireHub();
+            var result = await hub.InvokeAsync<GitActionResultDto>("DeleteGitAccountAsync", account.Id);
+            SetStatus(result.Message, !result.Success);
+            await ReloadConfigAsync();
+        }, "account");
+    }
+
+    private async Task TestAccountAsync(GitAccountDto account)
+    {
+        await RunUiAsync("Đang test account...", async () =>
+        {
+            var hub = RequireHub();
+            var result = await hub.InvokeAsync<GitCreatedRepositoryDto>("TestGitAccountAsync", account.Id);
+            SetStatus(result.Message, !result.Success);
+        }, "account");
+    }
+
+    private void ResetAccountForm()
+    {
+        EditingAccountId = null;
+        AccountForm = NewAccount();
+        AccountForm.OAuthRedirectPort = OAuth2Settings.CallbackPort <= 0 ? 53682 : OAuth2Settings.CallbackPort;
+    }
+
+    private void ResetAccountFormInModal()
+    {
+        if (EditingAccountId is not null)
+        {
+            var current = Accounts.FirstOrDefault(x => x.Id == EditingAccountId);
+            if (current is not null)
+            {
+                AccountForm = CloneAccount(current);
+                return;
+            }
+        }
+
+        AccountForm = NewAccount();
+    }
+
+    private void NormalizeAccountDefaults()
+    {
+        if (AccountForm.Provider == "gitlab" && (string.IsNullOrWhiteSpace(AccountForm.ApiBaseUrl) || AccountForm.ApiBaseUrl.Contains("github", StringComparison.OrdinalIgnoreCase)))
+        {
+            AccountForm.ApiBaseUrl = "https://gitlab.com/api/v4";
+        }
+        else if (AccountForm.Provider == "github" && (string.IsNullOrWhiteSpace(AccountForm.ApiBaseUrl) || AccountForm.ApiBaseUrl.Contains("gitlab", StringComparison.OrdinalIgnoreCase)))
+        {
+            AccountForm.ApiBaseUrl = "https://api.github.com";
+        }
+    }
+
+
+    private void PreviousAccountPage()
+    {
+        if (AccountPage > 1)
+        {
+            AccountPage--;
+        }
+    }
+
+    private void NextAccountPage()
+    {
+        if (AccountPage < AccountTotalPages)
+        {
+            AccountPage++;
+        }
+    }
+
+    private void ClampAccountPage()
+    {
+        if (AccountPage < 1)
+        {
+            AccountPage = 1;
+        }
+
+        if (AccountPage > AccountTotalPages)
+        {
+            AccountPage = AccountTotalPages;
+        }
+    }
+
+    private async Task StartOAuthForAccountFormAsync()
+    {
+        await RunUiAsync("Đang OAuth lấy token...", async () =>
+        {
+            NormalizeAccountDefaults();
+            if (string.IsNullOrWhiteSpace(AccountForm.Id))
+            {
+                AccountForm.Id = Guid.NewGuid().ToString("N");
+            }
+
+            var hub = RequireHub();
+            var result = await hub.InvokeAsync<GitOAuthResultDto>("StartGitOAuthAsync", new GitOAuthRequestDto
+            {
+                Account = AccountForm,
+                TimeoutSeconds = 300
+            });
+            SetStatus(result.Message, !result.Success);
+            if (result.Success && result.Account is not null)
+            {
+                AccountForm = CloneAccount(result.Account);
+                EditingAccountId = AccountForm.Id;
+                SelectedAccountId = AccountForm.Id;
+                await ReloadConfigAsync();
+            }
+        }, "account");
+    }
+
+
+    private async Task LoadProviderRepositoriesAsync()
+        => await RunUiAsync("Đang lấy repository list...", async () => await LoadProviderRepositoriesCoreAsync(), "repositories");
+
+    private async Task LoadProviderRepositoriesCoreAsync()
+    {
+        var hub = RequireHub();
+        var accountIds = GetRepoActionAccountIds();
+        if (accountIds.Count == 0)
+        {
+            SetStatus("Chưa chọn hoặc tick account để lấy repository list.", true);
+            return;
+        }
+
+        if (accountIds.Count > 1)
+        {
+            ProviderRepositories = await hub.InvokeAsync<GitRepositoryListResponseDto>("ListGitRepositoriesForAccountsAsync", new GitBatchRepositoryListRequestDto
+            {
+                AccountIds = accountIds,
+                Search = RepoListSearch,
+                PageSize = 50,
+                MaxParallel = 4
+            });
+        }
+        else
+        {
+            RepoListAccountId = accountIds[0];
+            ProviderRepositories = await hub.InvokeAsync<GitRepositoryListResponseDto>("ListGitRepositoriesAsync", new GitRepositoryListRequestDto
+            {
+                AccountId = RepoListAccountId,
+                Search = RepoListSearch,
+                PageSize = 50
+            });
+        }
+
+        SetStatus(ProviderRepositories.Message, !ProviderRepositories.Success);
+        if (ProviderRepositories.Items.Count > 0)
+        {
+            var first = ProviderRepositories.Items[0];
+            SelectedProviderRepositoryFullName = first.FullName;
+            SelectedProviderRepositoryId = first.Id;
+            if (!string.IsNullOrWhiteSpace(first.AccountId))
+            {
+                RepoListAccountId = first.AccountId;
+            }
+        }
+    }
+
+    private async Task TestSelectedAccountsAsync()
+    {
+        await RunUiAsync("Đang test nhiều account...", async () =>
+        {
+            var hub = RequireHub();
+            BatchResults = await hub.InvokeAsync<GitBatchAccountActionResponseDto>("TestGitAccountsAsync", new GitBatchAccountActionRequestDto
+            {
+                AccountIds = SelectedGitAccountIds.ToList(),
+                Action = "test",
+                MaxParallel = 4
+            });
+            SetStatus(BatchResults.Message, !BatchResults.Success);
+        }, "account");
+    }
+
+    private async Task CreateRepositoryForSelectedAccountsAsync()
+    {
+        await RunUiAsync("Đang tạo repository trên nhiều account...", async () =>
+        {
+            var hub = RequireHub();
+            BatchResults = await hub.InvokeAsync<GitBatchAccountActionResponseDto>("CreateGitRepositoryForAccountsAsync", new GitBatchCreateRepositoryRequestDto
+            {
+                AccountIds = SelectedGitAccountIds.ToList(),
+                Name = CreateRepoName,
+                Description = CreateRepoDescription,
+                Visibility = CreateRepoVisibility,
+                InitializeReadme = CreateRepoReadme,
+                MaxParallel = 3
+            });
+            SetStatus(BatchResults.Message, !BatchResults.Success);
+            await LoadProviderRepositoriesCoreAsync();
+        }, "clone");
+    }
+
+    private void SelectProviderRepository(GitProviderRepositoryDto repo)
+    {
+        SelectedProviderRepositoryFullName = repo.FullName;
+        SelectedProviderRepositoryId = repo.Id;
+        if (!string.IsNullOrWhiteSpace(repo.AccountId))
+        {
+            RepoListAccountId = repo.AccountId;
+            SelectedAccountId = repo.AccountId;
+        }
+        if (!string.IsNullOrWhiteSpace(repo.DefaultBranch))
+        {
+            PushBranch = repo.DefaultBranch;
+        }
+
+        if (!string.IsNullOrWhiteSpace(repo.CloneUrl))
+        {
+            CloneUrl = repo.CloneUrl;
+        }
+    }
+
+    private void UseProviderRepositoryForClone(GitProviderRepositoryDto repo)
+    {
+        SelectProviderRepository(repo);
+        CloneUrl = repo.CloneUrl;
+        CloneTargetName = repo.Name;
+        ActiveTab = "clone";
+        SetStatus("Đã đưa repository vào form Clone: " + repo.FullName, false);
+    }
+
+    private void UseProviderRepositoryAsRemote(GitProviderRepositoryDto repo)
+    {
+        SelectProviderRepository(repo);
+        RemoteName = "origin";
+        PushRemote = "origin";
+        RemoteUrl = repo.CloneUrl;
+        PushBranch = string.IsNullOrWhiteSpace(repo.DefaultBranch) ? PushBranch : repo.DefaultBranch;
+        ActiveTab = "commands";
+        SetStatus("Đã đưa repository vào remote URL: " + repo.FullName, false);
+    }
+
+    private async Task LoadTrafficForRepositoryAsync(GitProviderRepositoryDto repo)
+    {
+        SelectProviderRepository(repo);
+        ActiveTab = "traffic";
+        await LoadTrafficForSelectedRepoAsync();
+    }
+
+    private async Task LoadTrafficForSelectedRepoAsync()
+        => await RunUiAsync("Đang lấy repository traffic...", async () => await LoadTrafficForSelectedRepoCoreAsync(), "traffic");
+
+    private async Task LoadTrafficForSelectedRepoCoreAsync()
+    {
+        if (string.IsNullOrWhiteSpace(RepoListAccountId))
+        {
+            RepoListAccountId = SelectedAccountId ?? string.Empty;
+        }
+
+        var hub = RequireHub();
+        TrafficStats = await hub.InvokeAsync<GitTrafficStatsDto>("GetGitRepositoryTrafficAsync", new GitTrafficRequestDto
+        {
+            AccountId = RepoListAccountId,
+            RepositoryFullName = SelectedProviderRepositoryFullName ?? string.Empty,
+            RepositoryId = SelectedProviderRepositoryId ?? string.Empty
+        });
+        SetStatus(TrafficStats.Message, !TrafficStats.Success);
+    }
+
+    private async Task LoadGitConfigFilesAsync()
+        => await RunUiAsync("Đang đọc .git/.github config...", async () => await LoadGitConfigFilesCoreAsync(), "config");
+
+    private async Task LoadGitConfigFilesCoreAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ProjectFolder))
+        {
+            GitConfigFiles = null;
+            SelectedGitConfigPath = null;
+            return;
+        }
+
+        var hub = RequireHub();
+        GitConfigFiles = await hub.InvokeAsync<GitProjectConfigSnapshotDto>("GetGitProjectConfigFilesAsync", ProjectFolder);
+        if (GitConfigFiles.Files.Count == 0)
+        {
+            SelectedGitConfigPath = null;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(SelectedGitConfigPath) || GitConfigFiles.Files.All(x => x.RelativePath != SelectedGitConfigPath))
+        {
+            SelectedGitConfigPath = GitConfigFiles.Files[0].RelativePath;
+        }
+    }
+
+    private void SelectGitConfigFile(GitProjectConfigFileDto file)
+    {
+        SelectedGitConfigPath = file.RelativePath;
+    }
+
+    private async Task RefreshRepositoryAsync()
+        => await RunUiAsync("Đang refresh repository...", async () => await RefreshRepositoryCoreAsync(), "commands");
+
+    private async Task RefreshRepositoryCoreAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ProjectFolder))
+        {
+            return;
+        }
+
+        var hub = RequireHub();
+        Repository = await hub.InvokeAsync<GitRepositoryStatusDto>("GetGitRepositoryStatusAsync", ProjectFolder);
+        if (string.IsNullOrWhiteSpace(PushBranch))
+        {
+            PushBranch = Repository.CurrentBranch;
+        }
+    }
+
+    private async Task GitInitAsync()
+    {
+        await RunGitActionAsync("Đang git init...", async hub => await hub.InvokeAsync<GitActionResultDto>("GitInitAsync", ProjectFolder));
+    }
+
+    private async Task AddRemoteAsync()
+    {
+        await RunGitActionAsync("Đang thêm remote...", async hub => await hub.InvokeAsync<GitActionResultDto>("AddGitRemoteAsync", new GitRemoteRequestDto
+        {
+            FolderPath = ProjectFolder,
+            RemoteName = RemoteName,
+            RemoteUrl = RemoteUrl,
+            SetUrlIfExists = true
+        }));
+    }
+
+    private async Task AddSelectedFilesAsync()
+    {
+        await RunGitActionAsync("Đang git add selected...", async hub => await hub.InvokeAsync<GitActionResultDto>("AddGitFilesAsync", new GitAddRequestDto
+        {
+            FolderPath = ProjectFolder,
+            StageAll = false,
+            Paths = SelectedGitPaths.ToList()
+        }));
+    }
+
+    private async Task AddAllFilesAsync()
+    {
+        await RunGitActionAsync("Đang git add all...", async hub => await hub.InvokeAsync<GitActionResultDto>("AddGitFilesAsync", new GitAddRequestDto
+        {
+            FolderPath = ProjectFolder,
+            StageAll = true
+        }));
+    }
+
+    private async Task AddCommitPushAsync()
+    {
+        await RunUiAsync("Đang Add → Commit → Push...", async () =>
+        {
+            var hub = RequireHub();
+            var addResult = await hub.InvokeAsync<GitActionResultDto>("AddGitFilesAsync", new GitAddRequestDto
+            {
+                FolderPath = ProjectFolder,
+                StageAll = SelectedGitPaths.Count == 0,
+                Paths = SelectedGitPaths.ToList()
+            });
+            if (!addResult.Success)
+            {
+                Repository = addResult.Repository ?? Repository;
+                SetStatus(addResult.Message, true);
+                return;
+            }
+
+            var commitResult = await hub.InvokeAsync<GitActionResultDto>("CommitGitAsync", new GitCommitRequestDto
+            {
+                FolderPath = ProjectFolder,
+                Message = CommitMessage,
+                StageAll = false
+            });
+            if (!commitResult.Success)
+            {
+                Repository = commitResult.Repository ?? addResult.Repository ?? Repository;
+                SetStatus(commitResult.Message, true);
+                return;
+            }
+
+            var pushResult = await hub.InvokeAsync<GitActionResultDto>("PushGitAsync", new GitPushPullRequestDto
+            {
+                FolderPath = ProjectFolder,
+                RemoteName = PushRemote,
+                BranchName = PushBranch,
+                SetUpstream = true
+            });
+            Repository = pushResult.Repository ?? commitResult.Repository ?? addResult.Repository;
+            SetStatus(pushResult.Message, !pushResult.Success);
+            await LoadFileExplorerCoreAsync();
+        });
+    }
+
+    private async Task CommitAsync()
+    {
+        await RunGitActionAsync("Đang commit...", async hub => await hub.InvokeAsync<GitActionResultDto>("CommitGitAsync", new GitCommitRequestDto
+        {
+            FolderPath = ProjectFolder,
+            Message = CommitMessage,
+            StageAll = StageAll,
+            Paths = StageAll ? new List<string>() : SelectedGitPaths.ToList()
+        }));
+    }
+
+    private async Task PushAsync()
+    {
+        await RunGitActionAsync("Đang push...", async hub => await hub.InvokeAsync<GitActionResultDto>("PushGitAsync", new GitPushPullRequestDto
+        {
+            FolderPath = ProjectFolder,
+            RemoteName = string.IsNullOrWhiteSpace(PushRemote) ? "origin" : PushRemote,
+            BranchName = PushBranch,
+            SetUpstream = true
+        }));
+    }
+
+    private async Task PullAsync()
+    {
+        await RunGitActionAsync("Đang pull...", async hub => await hub.InvokeAsync<GitActionResultDto>("PullGitAsync", new GitPushPullRequestDto
+        {
+            FolderPath = ProjectFolder,
+            RemoteName = string.IsNullOrWhiteSpace(PushRemote) ? "origin" : PushRemote,
+            BranchName = PushBranch,
+            PullRebase = PullRebase
+        }));
+    }
+
+    private async Task CreateBranchAsync()
+    {
+        await RunGitActionAsync("Đang tạo branch...", async hub => await hub.InvokeAsync<GitActionResultDto>("CreateGitBranchAsync", new GitBranchRequestDto
+        {
+            FolderPath = ProjectFolder,
+            BranchName = NewBranchName,
+            CheckoutAfterCreate = true
+        }));
+        PushBranch = NewBranchName;
+
+    }
+
+    private async Task CheckoutBranchAsync(string branchName)
+    {
+        await RunGitActionAsync("Đang checkout branch...", async hub => await hub.InvokeAsync<GitActionResultDto>("CheckoutGitBranchAsync", new GitBranchRequestDto
+        {
+            FolderPath = ProjectFolder,
+            BranchName = branchName,
+            CheckoutAfterCreate = false
+        }));
+        PushBranch = branchName;
+
+    }
+
+    private async Task LoadFileExplorerFromFirstPageAsync()
+    {
+        ExplorerPage = 1;
+        await LoadFileExplorerAsync();
+    }
+
+    private async Task LoadRemoteExplorerFromFirstPageAsync()
+    {
+        RemoteExplorerPage = 1;
+        await LoadRemoteExplorerAsync();
+    }
+
+    private async Task PreviousExplorerPage()
+    {
+        ExplorerPage = Math.Max(1, ExplorerPage - 1);
+        await LoadFileExplorerAsync();
+    }
+
+    private async Task NextExplorerPage()
+    {
+        ExplorerPage++;
+        await LoadFileExplorerAsync();
+    }
+
+    private async Task PreviousRemoteExplorerPage()
+    {
+        RemoteExplorerPage = Math.Max(1, RemoteExplorerPage - 1);
+        await LoadRemoteExplorerAsync();
+    }
+
+    private async Task NextRemoteExplorerPage()
+    {
+        RemoteExplorerPage++;
+        await LoadRemoteExplorerAsync();
+    }
+
+    private async Task LoadFileExplorerAsync()
+        => await RunUiAsync("Đang tải Local Explorer...", async () => await LoadFileExplorerCoreAsync(), "explorer");
+
+    private async Task LoadRemoteExplorerAsync()
+        => await RunUiAsync("Đang tải Remote Git list...", async () => await LoadRemoteExplorerCoreAsync(), "explorer");
+
+    private async Task LoadFileExplorerCoreAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ProjectFolder))
+        {
+            ExplorerData = null;
+            return;
+        }
+
+        var hub = RequireHub();
+        ExplorerData = await hub.InvokeAsync<GitFileExplorerDto>("GetGitFileExplorerFolderAsync", ProjectFolder, LocalExplorerCurrentPath, FileSearch, ExplorerPage, ExplorerPageSize, true);
+        LocalExplorerCurrentPath = ExplorerData.CurrentRelativePath;
+        ExplorerPage = ExplorerData.Page;
+        SelectedGitPaths.RemoveWhere(path => ExplorerData.Items.All(item => !string.Equals(item.RelativePath, path, StringComparison.OrdinalIgnoreCase) || !item.CanStage));
+    }
+
+    private async Task LoadRemoteExplorerCoreAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ProjectFolder))
+        {
+            RemoteExplorerData = null;
+            return;
+        }
+
+        var hub = RequireHub();
+        RemoteExplorerData = await hub.InvokeAsync<GitRemoteExplorerDto>("GetGitRemoteExplorerAsync", ProjectFolder, string.IsNullOrWhiteSpace(PushRemote) ? "origin" : PushRemote, PushBranch, RemoteFileSearch, RemoteExplorerPage, RemoteExplorerPageSize, true, RemoteExplorerCurrentPath);
+        RemoteExplorerCurrentPath = RemoteExplorerData.CurrentRelativePath;
+        if (string.IsNullOrWhiteSpace(PushBranch))
+        {
+            PushBranch = RemoteExplorerData.BranchName;
+        }
+        RemoteExplorerPage = RemoteExplorerData.Page;
+    }
+
+    private void ToggleGitPathSelection(string relativePath, ChangeEventArgs args)
+    {
+        var selected = args.Value is bool b ? b : bool.TryParse(args.Value?.ToString(), out var parsed) && parsed;
+        if (selected)
+        {
+            SelectedGitPaths.Add(relativePath);
+        }
+        else
+        {
+            SelectedGitPaths.Remove(relativePath);
+        }
+    }
+
+    private void ToggleSelectVisibleFiles(ChangeEventArgs args)
+    {
+        if (ExplorerData is null)
+        {
+            return;
+        }
+
+        var selected = args.Value is bool b ? b : bool.TryParse(args.Value?.ToString(), out var parsed) && parsed;
+        foreach (var item in ExplorerData.Items.Where(x => x.CanStage))
+        {
+            if (selected)
+            {
+                SelectedGitPaths.Add(item.RelativePath);
+            }
+            else
+            {
+                SelectedGitPaths.Remove(item.RelativePath);
+            }
+        }
+    }
+
+    private void ClearSelectedGitPaths() => SelectedGitPaths.Clear();
+
+    private async Task OpenLocalItemAsync(GitLocalFileDto item)
+    {
+        var result = item.IsDirectory ? await Explorer.OpenFolderAsync(item.FullPath) : await Explorer.OpenFileLocationAsync(item.FullPath);
+        SetStatus(result.Message, !result.Success);
+    }
+
+    private async Task NavigateLocalExplorerAsync(string? relativePath)
+    {
+        LocalExplorerCurrentPath = NormalizeUiRelativePath(relativePath);
+        ExplorerPage = 1;
+        SelectedFilePreview = null;
+        await LoadFileExplorerAsync();
+    }
+
+    private async Task GoLocalExplorerParentAsync()
+    {
+        LocalExplorerCurrentPath = ExplorerData?.ParentRelativePath ?? string.Empty;
+        ExplorerPage = 1;
+        await LoadFileExplorerAsync();
+    }
+
+    private async Task OpenLocalExplorerItemAsync(GitLocalFileDto item)
+    {
+        if (item.IsDirectory)
+        {
+            LocalExplorerCurrentPath = item.RelativePath;
+            ExplorerPage = 1;
+            FileSearch = string.Empty;
+            await LoadFileExplorerAsync();
+            return;
+        }
+
+        await PreviewLocalFileAsync(item);
+    }
+
+    private async Task PreviewLocalFileAsync(GitLocalFileDto item)
+    {
+        if (item.IsDirectory)
+        {
+            await NavigateLocalExplorerAsync(item.RelativePath);
+            return;
+        }
+
+        await RunUiAsync("Đang đọc raw local file...", async () =>
+        {
+            var hub = RequireHub();
+            SelectedFilePreview = await hub.InvokeAsync<GitFilePreviewDto>("GetGitLocalFilePreviewAsync", ProjectFolder, item.RelativePath);
+            SetStatus(SelectedFilePreview.Message, !SelectedFilePreview.Success);
+        }, "explorer");
+    }
+
+    private async Task NavigateRemoteExplorerAsync(string? relativePath)
+    {
+        RemoteExplorerCurrentPath = NormalizeUiRelativePath(relativePath);
+        RemoteExplorerPage = 1;
+        RemoteFileSearch = string.Empty;
+        SelectedFilePreview = null;
+        await LoadRemoteExplorerAsync();
+    }
+
+    private async Task GoRemoteExplorerParentAsync()
+    {
+        RemoteExplorerCurrentPath = RemoteExplorerData?.ParentRelativePath ?? string.Empty;
+        RemoteExplorerPage = 1;
+        await LoadRemoteExplorerAsync();
+    }
+
+    private async Task OpenRemoteExplorerItemAsync(GitRemoteFileDto item)
+    {
+        if (string.Equals(item.ObjectType, "tree", StringComparison.OrdinalIgnoreCase))
+        {
+            await NavigateRemoteExplorerAsync(item.Path);
+            return;
+        }
+
+        await PreviewRemoteFileAsync(item);
+    }
+
+    private async Task PreviewRemoteFileAsync(GitRemoteFileDto item)
+    {
+        if (!string.Equals(item.ObjectType, "blob", StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus("Remote item này là tree/folder, chưa preview raw.", true);
+            return;
+        }
+
+        await RunUiAsync("Đang đọc raw remote file...", async () =>
+        {
+            var hub = RequireHub();
+            SelectedFilePreview = await hub.InvokeAsync<GitFilePreviewDto>("GetGitRemoteFilePreviewAsync", ProjectFolder, string.IsNullOrWhiteSpace(PushRemote) ? "origin" : PushRemote, PushBranch, item.Path);
+            if (string.IsNullOrWhiteSpace(SelectedFilePreview.RawUrl) && !string.IsNullOrWhiteSpace(item.RawUrl))
+            {
+                SelectedFilePreview.RawUrl = item.RawUrl;
+            }
+            SetStatus(SelectedFilePreview.Message, !SelectedFilePreview.Success);
+        }, "explorer");
+    }
+
+    private async Task AddSingleFileAsync(GitLocalFileDto item)
+    {
+        if (!item.CanStage)
+        {
+            SetStatus("File/folder này đang bị .gitignore nên không thể git add.", true);
+            return;
+        }
+
+        SelectedGitPaths.Clear();
+        SelectedGitPaths.Add(item.RelativePath);
+        await AddSelectedFilesAsync();
+    }
+
+    private async Task AddLocalItemToGitIgnoreAsync(GitLocalFileDto item) => await UpdateGitIgnoreFromExplorerAsync(item, true);
+
+    private async Task RemoveLocalItemFromGitIgnoreAsync(GitLocalFileDto item) => await UpdateGitIgnoreFromExplorerAsync(item, false);
+
+    private async Task UpdateGitIgnoreFromExplorerAsync(GitLocalFileDto item, bool addToIgnore)
+    {
+        await RunUiAsync(addToIgnore ? "Đang thêm vào .gitignore..." : "Đang bỏ khỏi .gitignore...", async () =>
+        {
+            var hub = RequireHub();
+            var result = await hub.InvokeAsync<GitActionResultDto>("UpdateGitIgnoreRuleAsync", new GitIgnoreRuleRequestDto
+            {
+                FolderPath = ProjectFolder,
+                RelativePath = item.RelativePath,
+                IsDirectory = item.IsDirectory,
+                AddToIgnore = addToIgnore
+            });
+            SetStatus(result.Message, !result.Success);
+            await LoadGitIgnoreCoreAsync();
+            await LoadFileExplorerCoreAsync();
+        }, "explorer");
+    }
+
+    private void ClearSelectedFilePreview() => SelectedFilePreview = null;
+
+    private async Task CopyTextAsync(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("configToolTheme.copyText", text);
+            SetStatus("Đã copy raw URL.", false);
+        }
+        catch
+        {
+            SetStatus("Không copy được bằng clipboard API, hãy copy thủ công.", true);
+        }
+    }
+
+    private async Task LoadGitIgnoreAsync()
+        => await RunUiAsync("Đang đọc .gitignore...", async () => await LoadGitIgnoreCoreAsync(), "ignore");
+
+    private async Task LoadGitIgnoreCoreAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ProjectFolder))
+        {
+            return;
+        }
+
+        var hub = RequireHub();
+        GitIgnoreText = await hub.InvokeAsync<string>("LoadGitIgnoreAsync", ProjectFolder);
+    }
+
+    private async Task SaveGitIgnoreAsync()
+    {
+        await RunGitActionAsync("Đang lưu .gitignore...", async hub => await hub.InvokeAsync<GitActionResultDto>("SaveGitIgnoreAsync", ProjectFolder, GitIgnoreText));
+    }
+
+    private async Task PickCloneFolderAsync()
+    {
+        try
+        {
+            var folder = await FolderPicker.PickFolderAsync("Chọn thư mục đích để git clone", "Chọn folder clone");
+            if (!string.IsNullOrWhiteSpace(folder))
+            {
+                CloneParentFolder = folder;
+                var hub = RequireHub();
+                await hub.InvokeAsync<GitActionResultDto>("SaveGitCloneFolderAsync", CloneParentFolder);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Không mở được folder dialog: " + ex.Message, true);
+        }
+    }
+
+    private async Task CloneAsync()
+    {
+        await RunGitActionAsync("Đang clone...", async hub => await hub.InvokeAsync<GitActionResultDto>("CloneGitAsync", new GitCloneRequestDto
+        {
+            ParentFolderPath = CloneParentFolder,
+            RepositoryUrl = CloneUrl,
+            TargetFolderName = CloneTargetName
+        }), useReturnedRepositoryFolder: true);
+    }
+
+    private async Task CreateRepositoryAsync()
+    {
+        await RunUiAsync("Đang tạo repository...", async () =>
+        {
+            var hub = RequireHub();
+            var result = await hub.InvokeAsync<GitCreatedRepositoryDto>("CreateGitRepositoryAsync", new GitCreateRepositoryRequestDto
+            {
+                AccountId = CreateRepoAccountId,
+                Name = CreateRepoName,
+                Description = CreateRepoDescription,
+                Visibility = CreateRepoVisibility,
+                InitializeReadme = CreateRepoReadme
+            });
+            LastCreatedCloneUrl = result.CloneUrl;
+            if (!string.IsNullOrWhiteSpace(result.CloneUrl))
+            {
+                CloneUrl = result.CloneUrl;
+                RemoteUrl = result.CloneUrl;
+            }
+            SetStatus(result.Message, !result.Success);
+        }, "clone");
+    }
+
+    private void UseCreatedRepoAsRemote()
+    {
+        RemoteUrl = LastCreatedCloneUrl;
+        ActiveTab = "commands";
+    }
+
+    private async Task LoadOAuth2SettingsCoreAsync()
+    {
+        var hub = RequireHub();
+        OAuth2Settings = await hub.InvokeAsync<GitOAuth2ConfigDto>("GetGitOAuth2ConfigAsync");
+    }
+
+    private async Task SaveOAuth2SettingsAsync()
+    {
+        await RunUiAsync("Đang lưu OAuth2.json...", async () =>
+        {
+            var hub = RequireHub();
+            OAuth2Settings = await hub.InvokeAsync<GitOAuth2ConfigDto>("SaveGitOAuth2ConfigAsync", OAuth2Settings);
+            SetStatus($"Đã lưu OAuth2.json. Callback port: {OAuth2Settings.CallbackPort}", false);
+        }, "account");
+    }
+
+    private void UseGlobalOAuthPortInAccountForm()
+    {
+        AccountForm.OAuthRedirectPort = OAuth2Settings.CallbackPort <= 0 ? 53682 : OAuth2Settings.CallbackPort;
+    }
+
+    private async Task LoadWorkspacesAsync()
+        => await RunUiAsync("Đang tải workspaces...", async () => await LoadWorkspacesCoreAsync(), "workspaces");
+
+    private async Task LoadWorkspacesCoreAsync()
+    {
+        var hub = RequireHub();
+        var response = await hub.InvokeAsync<GitWorkspaceResponseDto>("GetGitWorkspacesAsync");
+        Workspaces = response.Items;
+        SelectedWorkspaceIds.RemoveWhere(id => Workspaces.All(x => !string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private void PrepareWorkspaceFromRepository(GitProviderRepositoryDto repo)
+    {
+        WorkspaceForm = new GitWorkspaceDto
+        {
+            AccountId = repo.AccountId,
+            AccountName = repo.AccountName,
+            Provider = repo.Provider,
+            RepositoryFullName = repo.FullName,
+            RepositoryId = repo.Id,
+            CloneUrl = repo.CloneUrl,
+            HtmlUrl = repo.HtmlUrl,
+            BranchName = string.IsNullOrWhiteSpace(repo.DefaultBranch) ? "main" : repo.DefaultBranch,
+            RemoteName = string.IsNullOrWhiteSpace(PushRemote) ? "origin" : PushRemote,
+            FolderPath = ProjectFolder
+        };
+        ActiveTab = "workspaces";
+        SetStatus("Đã đưa repo vào form workspace. Chọn folder rồi bấm Lưu workspace.", false);
+    }
+
+    private async Task PickWorkspaceFolderAsync()
+    {
+        var folder = await FolderPicker.PickFolderAsync("Chọn thư mục local cho workspace", "Chọn workspace folder");
+        if (!string.IsNullOrWhiteSpace(folder))
+        {
+            WorkspaceForm.FolderPath = folder;
+        }
+    }
+
+    private async Task SaveWorkspaceAsync()
+    {
+        await RunUiAsync("Đang lưu workspace...", async () =>
+        {
+            var hub = RequireHub();
+            var result = await hub.InvokeAsync<GitActionResultDto>("SaveGitWorkspaceAsync", WorkspaceForm);
+            SetStatus(result.Message, !result.Success);
+            if (result.Success)
+            {
+                await LoadWorkspacesCoreAsync();
+            }
+        }, "workspaces");
+    }
+
+    private async Task DeleteWorkspaceAsync(GitWorkspaceDto ws)
+    {
+        await RunUiAsync("Đang xóa workspace...", async () =>
+        {
+            var hub = RequireHub();
+            var result = await hub.InvokeAsync<GitActionResultDto>("DeleteGitWorkspaceAsync", ws.Id);
+            SetStatus(result.Message, !result.Success);
+            await LoadWorkspacesCoreAsync();
+        }, "workspaces");
+    }
+
+    private void EditWorkspace(GitWorkspaceDto ws) => WorkspaceForm = CloneWorkspace(ws);
+
+    private async Task UseWorkspaceFolderAsync(GitWorkspaceDto ws)
+    {
+        ProjectFolder = ws.FolderPath;
+        PushRemote = string.IsNullOrWhiteSpace(ws.RemoteName) ? "origin" : ws.RemoteName;
+        PushBranch = ws.BranchName;
+        await UseProjectFolderAsync();
+    }
+
+    private void ResetWorkspaceForm() => WorkspaceForm = NewWorkspace();
+
+    private void ToggleWorkspaceSelection(string id, ChangeEventArgs args)
+    {
+        var selected = args.Value is bool b ? b : bool.TryParse(args.Value?.ToString(), out var parsed) && parsed;
+        if (selected) SelectedWorkspaceIds.Add(id); else SelectedWorkspaceIds.Remove(id);
+    }
+
+    private async Task RunWorkspaceActionAsync(string action)
+    {
+        await RunUiAsync($"Đang chạy multi workspace {action}...", async () =>
+        {
+            var hub = RequireHub();
+            BatchResults = await hub.InvokeAsync<GitBatchAccountActionResponseDto>("RunGitWorkspaceActionsAsync", new GitBatchWorkspaceActionRequestDto
+            {
+                WorkspaceIds = SelectedWorkspaceIds.ToList(),
+                Action = action,
+                MaxParallel = 3
+            });
+            SetStatus(BatchResults.Message, !BatchResults.Success);
+            await LoadWorkspacesCoreAsync();
+        }, "workspaces");
+    }
+
+    private async Task FindRepositoriesAsync()
+    {
+        await RunUiAsync("Đang scan repository...", async () =>
+        {
+            var hub = RequireHub();
+            FoundRepositories = await hub.InvokeAsync<List<GitRepositorySearchResultDto>>("FindGitRepositoriesAsync", ScanRootFolder, ScanKeyword, 100);
+        }, "scan");
+    }
+
+    private async Task UseFoundRepositoryAsync(GitRepositorySearchResultDto repo)
+    {
+        ProjectFolder = repo.FolderPath;
+        await UseProjectFolderAsync();
+        ActiveTab = "commands";
+    }
+
+
+    private IEnumerable<GitAccountDto> FilterGitAccounts()
+    {
+        var query = AccountSearch.Trim();
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return Accounts;
+        }
+
+        return Accounts.Where(account => ContainsText(account.Provider, query)
+            || ContainsText(account.Name, query)
+            || ContainsText(account.Username, query)
+            || ContainsText(account.Email, query)
+            || ContainsText(account.ApiBaseUrl, query)
+            || ContainsText(account.GitBaseUrl, query));
+    }
+
+    private IEnumerable<GitBranchDto> FilterBranches()
+    {
+        var branches = Repository?.Branches ?? [];
+        var query = BranchSearch.Trim();
+        return string.IsNullOrWhiteSpace(query)
+            ? branches
+            : branches.Where(branch => ContainsText(branch.Name, query));
+    }
+
+    private IEnumerable<GitProjectConfigFileDto> FilterGitConfigFiles()
+    {
+        var files = GitConfigFiles?.Files ?? [];
+        var query = GitConfigSearch.Trim();
+        return string.IsNullOrWhiteSpace(query)
+            ? files
+            : files.Where(file => ContainsText(file.Source, query)
+                || ContainsText(file.DisplayName, query)
+                || ContainsText(file.RelativePath, query)
+                || ContainsText(file.FullPath, query)
+                || ContainsText(file.Content, query));
+    }
+
+    private IEnumerable<GitWorkspaceDto> FilterWorkspaces()
+    {
+        var query = WorkspaceSearch.Trim();
+        return string.IsNullOrWhiteSpace(query)
+            ? Workspaces
+            : Workspaces.Where(ws => ContainsText(ws.Provider, query)
+                || ContainsText(ws.AccountName, query)
+                || ContainsText(ws.RepositoryFullName, query)
+                || ContainsText(ws.RepositoryId, query)
+                || ContainsText(ws.BranchName, query)
+                || ContainsText(ws.RemoteName, query)
+                || ContainsText(ws.FolderPath, query)
+                || ContainsText(ws.CloneUrl, query));
+    }
+
+    private IEnumerable<GitConsoleEntryDto> FilterLogs()
+    {
+        var query = ConsoleSearch.Trim();
+        return string.IsNullOrWhiteSpace(query)
+            ? Logs
+            : Logs.Where(log => ContainsText(log.Level, query)
+                || ContainsText(log.Scope, query)
+                || ContainsText(log.Message, query)
+                || log.Time.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss").Contains(query, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool ContainsText(string? source, string query)
+        => !string.IsNullOrWhiteSpace(source) && source.Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    private void OnAccountSearchChanged(ChangeEventArgs args)
+    {
+        AccountSearch = args.Value?.ToString() ?? string.Empty;
+        AccountPage = 1;
+    }
+
+    private void ClearAccountSearch()
+    {
+        AccountSearch = string.Empty;
+        AccountPage = 1;
+    }
+
+    private void ClearBranchSearch() => BranchSearch = string.Empty;
+    private void ClearGitConfigSearch() => GitConfigSearch = string.Empty;
+    private void ClearWorkspaceSearch() => WorkspaceSearch = string.Empty;
+    private void ClearConsoleSearch() => ConsoleSearch = string.Empty;
+
+    private void FillRemote(GitRemoteDto remote)
+    {
+        RemoteName = remote.Name;
+        RemoteUrl = string.IsNullOrWhiteSpace(remote.PushUrl) ? remote.FetchUrl : remote.PushUrl;
+        PushRemote = remote.Name;
+    }
+
+    private async Task CancelCurrentGitTabAsync()
+    {
+        var hub = RequireHub();
+        CancelRequested = true;
+        var tabKey = string.IsNullOrWhiteSpace(CurrentBusyScope) ? ActiveTab : CurrentBusyScope;
+        try
+        {
+            var result = await hub.InvokeAsync<GitActionResultDto>("CancelGitTabActionsAsync", tabKey);
+            SetStatus(result.Message, !result.Success);
+            AddLog(new GitConsoleEntryDto { Level = "warn", Scope = "cancel", Message = result.Message });
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Không gửi được lệnh hủy: " + ex.Message, true);
+        }
+    }
+
+    private async Task CancelAllGitActionsAsync()
+    {
+        var hub = RequireHub();
+        CancelRequested = true;
+        try
+        {
+            var result = await hub.InvokeAsync<GitActionResultDto>("CancelAllGitActionsAsync");
+            SetStatus(result.Message, !result.Success);
+            AddLog(new GitConsoleEntryDto { Level = "warn", Scope = "cancel", Message = result.Message });
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Không gửi được lệnh hủy tất cả: " + ex.Message, true);
+        }
+    }
+
+    private static string GetGitTabTitle(string? tabKey) => (tabKey ?? "commands") switch
+    {
+        "account" => "Account/OAuth",
+        "commands" => "Lệnh Git",
+        "repositories" => "Repositories",
+        "traffic" => "Traffic",
+        "explorer" => "File Explorer",
+        "workspaces" => "Multi workspace",
+        "ignore" => ".gitignore",
+        "config" => ".git/.github config",
+        "clone" => "Clone/Create repo",
+        "scan" => "Tìm repo init",
+        _ => tabKey ?? "Git"
+    };
+
+    private async Task SafeStateHasChangedAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("disposed", StringComparison.OrdinalIgnoreCase) || ex.Message.Contains("renderer", StringComparison.OrdinalIgnoreCase))
+        {
+        }
+    }
+
+    private async Task RunGitActionAsync(string busyText, Func<HubConnection, Task<GitActionResultDto>> action, bool useReturnedRepositoryFolder = false)
+    {
+        await RunUiAsync(busyText, async () =>
+        {
+            var hub = RequireHub();
+            var result = await action(hub);
+            SetStatus(result.Message, !result.Success);
+            if (useReturnedRepositoryFolder && result.Repository is not null && !string.IsNullOrWhiteSpace(result.Repository.FolderPath))
+            {
+                ProjectFolder = result.Repository.FolderPath;
+            }
+            Repository = result.Repository ?? (string.IsNullOrWhiteSpace(ProjectFolder) ? null : await hub.InvokeAsync<GitRepositoryStatusDto>("GetGitRepositoryStatusAsync", ProjectFolder));
+            await LoadFileExplorerCoreAsync();
+        });
+    }
+
+    private async Task RunUiAsync(string busyText, Func<Task> action, string? operationScope = null)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        Busy = true;
+        CancelRequested = false;
+        CurrentBusyScope = operationScope ?? ActiveTab;
+        BusyText = busyText;
+        try
+        {
+            await action();
+        }
+        catch (OperationCanceledException)
+        {
+            if (!_disposed)
+            {
+                SetStatus("Đã hủy hành động.", false);
+                AddLog(new GitConsoleEntryDto { Level = "warn", Scope = "cancel", Message = "Đã hủy hành động." });
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception ex)
+        {
+            var canceled = CancelRequested || ex.Message.Contains("cancel", StringComparison.OrdinalIgnoreCase) || ex.Message.Contains("hủy", StringComparison.OrdinalIgnoreCase);
+            SetStatus(canceled ? "Đã gửi lệnh hủy hành động." : ex.Message, !canceled);
+            AddLog(new GitConsoleEntryDto { Level = canceled ? "warn" : "error", Scope = canceled ? "cancel" : "ui", Message = canceled ? "Đã gửi lệnh hủy hành động." : ex.Message });
+        }
+        finally
+        {
+            Busy = false;
+            CancelRequested = false;
+            CurrentBusyScope = null;
+            BusyText = null;
+        }
+    }
+
+    private HubConnection RequireHub()
+        => Hub ?? throw new InvalidOperationException("SignalR Git hub chưa sẵn sàng.");
+
+    private void AddLog(GitConsoleEntryDto entry)
+    {
+        Logs.Insert(0, entry);
+        if (Logs.Count > 500)
+        {
+            Logs.RemoveRange(500, Logs.Count - 500);
+        }
+    }
+
+    private void ClearLogs() => Logs.Clear();
+    private void ClearStatus() => StatusMessage = null;
+
+    private void SetStatus(string? message, bool isError)
+    {
+        StatusMessage = message;
+        StatusIsError = isError;
+    }
+
+    private static GitAccountDto NewAccount() => new()
+    {
+        Provider = "github",
+        Name = "GitHub account",
+        ApiBaseUrl = "https://api.github.com"
+    };
+
+    private static GitWorkspaceDto NewWorkspace() => new()
+    {
+        RemoteName = "origin",
+        BranchName = "main"
+    };
+
+    private static GitWorkspaceDto CloneWorkspace(GitWorkspaceDto ws) => new()
+    {
+        Id = ws.Id,
+        AccountId = ws.AccountId,
+        AccountName = ws.AccountName,
+        Provider = ws.Provider,
+        RepositoryFullName = ws.RepositoryFullName,
+        RepositoryId = ws.RepositoryId,
+        CloneUrl = ws.CloneUrl,
+        HtmlUrl = ws.HtmlUrl,
+        RemoteName = ws.RemoteName,
+        BranchName = ws.BranchName,
+        FolderPath = ws.FolderPath,
+        UpdatedAt = ws.UpdatedAt
+    };
+
+    private static GitAccountDto CloneAccount(GitAccountDto account) => new()
+    {
+        Id = account.Id,
+        Provider = account.Provider,
+        Name = account.Name,
+        Username = account.Username,
+        Email = account.Email,
+        Token = account.Token,
+        TokenSource = account.TokenSource,
+        TokenType = account.TokenType,
+        RefreshToken = account.RefreshToken,
+        TokenExpiresAt = account.TokenExpiresAt,
+        LastOAuthAt = account.LastOAuthAt,
+        OAuthClientId = account.OAuthClientId,
+        OAuthClientSecret = account.OAuthClientSecret,
+        OAuthScopes = account.OAuthScopes,
+        OAuthRedirectPort = account.OAuthRedirectPort,
+        ApiBaseUrl = account.ApiBaseUrl,
+        GitBaseUrl = account.GitBaseUrl,
+        IsDefault = account.IsDefault,
+        CreatedAt = account.CreatedAt,
+        UpdatedAt = account.UpdatedAt
+    };
+
+
+    private static long GetMetricMax(GitTrafficMetricDto metric)
+    {
+        var max = metric.Points.SelectMany(x => new[] { x.Count, x.Uniques }).DefaultIfEmpty(1).Max();
+        return Math.Max(1, max);
+    }
+
+    private static string BuildBarStyle(long value, long max)
+    {
+        var percent = Math.Clamp(max <= 0 ? 0 : value * 100.0 / max, 0, 100);
+        return $"width:{percent:0.##}%";
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes <= 0) return "-";
+        string[] units = ["B", "KB", "MB", "GB"];
+        double size = bytes;
+        var unit = 0;
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+        return $"{size:0.#} {units[unit]}";
+    }
+
+    private static string TrimMiddle(string? value, int max)
+    {
+        value ??= string.Empty;
+        if (value.Length <= max || max < 8)
+        {
+            return value;
+        }
+
+        var left = Math.Max(3, max / 2 - 1);
+        var right = Math.Max(3, max - left - 3);
+        return value[..left] + "..." + value[^right..];
+    }
+
+    private static string NormalizeUiRelativePath(string? value)
+    {
+        var path = (value ?? string.Empty).Trim().Trim('"').Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(path) || path.Contains("..", StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        return string.Join('/', path.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    private static string GetFileIcon(string? name)
+    {
+        var ext = Path.GetExtension(name ?? string.Empty).ToLowerInvariant();
+        return ext switch
+        {
+            ".cs" or ".razor" or ".js" or ".ts" or ".json" or ".css" or ".scss" or ".html" or ".xml" or ".sql" or ".php" or ".py" => "fa-file-code",
+            ".md" or ".txt" or ".yml" or ".yaml" or ".ini" or ".config" => "fa-file-lines",
+            ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".svg" => "fa-file-image",
+            ".zip" or ".rar" or ".7z" or ".gz" => "fa-file-zipper",
+            ".mp3" or ".wav" or ".ogg" => "fa-file-audio",
+            ".mp4" or ".webm" or ".mov" => "fa-file-video",
+            _ => "fa-file"
+        };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        if (Hub is not null)
+        {
+            try
+            {
+                await Hub.DisposeAsync();
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+    }
+}

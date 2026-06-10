@@ -1,0 +1,42 @@
+{
+  "connect": [
+    {
+      "id": "local-mysql",
+      "name": "Local MySQL root",
+      "typeconect": "mysql",
+      "host": "127.0.0.1",
+      "port": "3306",
+      "user": "root",
+      "password": "",
+      "allownopassword": true,
+      "database": "",
+      "timeoutseconds": 15
+    },
+    {
+      "id": "local-mariadb",
+      "name": "Local MariaDB root",
+      "typeconect": "mariadb",
+      "host": "127.0.0.1",
+      "port": "3306",
+      "user": "root",
+      "password": "",
+      "allownopassword": true,
+      "database": "",
+      "timeoutseconds": 15
+    },
+    {
+      "id": "local-mssql",
+      "name": "Local SQL Server sa",
+      "typeconect": "sqlserver",
+      "host": "127.0.0.1",
+      "port": "1433",
+      "user": "sa",
+      "password": "",
+      "allownopassword": false,
+      "database": "master",
+      "encrypt": false,
+      "trustservercertificate": true,
+      "timeoutseconds": 15
+    }
+  ]
+}

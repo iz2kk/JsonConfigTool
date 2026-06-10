@@ -1,0 +1,482 @@
+@page "/theme"
+@inject ThemeConfigService ThemeService
+@inject IJSRuntime JS
+
+<PageTitle>Theme Manager</PageTitle>
+
+<div class="ct-page theme-page">
+    <section class="ct-hero card border-0 shadow-sm">
+        <div class="card-body p-4">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div>
+                    <div class="ct-eyebrow"><i class="fa-duotone fa-solid fa-palette"></i> Theme Manager</div>
+                    <h1 class="ct-section-title mb-1">Theme bằng file CSS / SCSS</h1>
+                    <p class="ct-muted mb-0">Theme thật nằm trong thư mục <code>themes/*.css</code> hoặc <code>themes/*.scss</code>. <code>themeconfig.json</code> chỉ lưu danh sách, theme đang dùng và metadata import/export.</p>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-outline-secondary ct-btn" type="button" disabled="@Busy" @onclick="ReloadAsync"><i class="fa-duotone fa-solid fa-rotate"></i> Reload</button>
+                    <button class="btn btn-primary ct-btn" type="button" disabled="@Busy" @onclick="SaveCurrentAsync"><i class="fa-duotone fa-solid fa-floppy-disk"></i> Lưu file theme</button>
+                    <button class="btn btn-success ct-btn" type="button" disabled="@Busy" @onclick="SaveAndApplyAsync"><i class="fa-duotone fa-solid fa-wand-magic-sparkles"></i> Lưu & áp dụng</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(StatusMessage))
+    {
+        <div class="alert @(StatusIsError ? "alert-danger" : "alert-success") ct-alert shadow-sm" role="alert">
+            <i class="fa-duotone fa-solid @(StatusIsError ? "fa-triangle-exclamation" : "fa-circle-info")"></i>
+            <span>@StatusMessage</span>
+            <button type="button" class="btn-close ms-auto" aria-label="Close" @onclick="() => StatusMessage = null"></button>
+        </div>
+    }
+
+    <div class="theme-manager-layout">
+        <aside class="theme-sidebar card border-0 shadow-sm ct-panel">
+            <div class="card-body p-3">
+                <div class="d-flex justify-content-between align-items-center gap-2 mb-3">
+                    <div>
+                        <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-file-code"></i> Theme files</h2>
+                        <div class="ct-muted small">@ThemesDirectory</div>
+                    </div>
+                    <span class="badge text-bg-primary">@Themes.Count</span>
+                </div>
+
+                <div class="d-grid gap-2 mb-3">
+                    <button class="btn btn-primary ct-btn w-100" type="button" disabled="@Busy" @onclick="CreateNewTheme"><i class="fa-duotone fa-solid fa-plus"></i> Thêm theme CSS</button>
+                    <button class="btn btn-outline-primary ct-btn w-100" type="button" disabled="@Busy" @onclick="CreateNewScssTheme"><i class="fa-duotone fa-solid fa-plus"></i> Thêm theme SCSS</button>
+                </div>
+
+                <div class="theme-import-box mb-3">
+                    <label class="form-label small">Import theme file</label>
+                    <InputFile class="form-control" accept=".css,.scss,.json" OnChange="ImportThemeAsync" />
+                    <div class="ct-muted small mt-1">Nhận <code>.css</code>, <code>.scss</code>; nếu là <code>themeconfig.json</code> thì dùng để tham khảo metadata, không thay thế theme file trực tiếp.</div>
+                </div>
+
+                <div class="theme-list">
+                    @foreach (var theme in Themes)
+                    {
+                        <div class="theme-list-card @(EditForm.Id == theme.Id ? "editing" : null) @(Config?.ActiveThemeId == theme.Id ? "active" : null)">
+                            <button type="button" class="theme-list-main" @onclick="() => EditThemeAsync(theme.Id)">
+                                <span class="theme-file-icon @(theme.IsScss ? "scss" : "css")">@(theme.IsScss ? "SCSS" : "CSS")</span>
+                                <span>
+                                    <b>@theme.Name</b>
+                                    <small>@theme.FileName · @(theme.IsBuiltIn ? "built-in" : "custom")</small>
+                                </span>
+                            </button>
+                            <div class="theme-list-actions">
+                                <button class="btn btn-sm btn-outline-primary" type="button" disabled="@Busy" @onclick="() => SetActiveAsync(theme.Id)">Áp dụng</button>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@Busy" @onclick="() => DuplicateAsync(theme.Id)">Nhân bản</button>
+                                <button class="btn btn-sm btn-outline-danger" type="button" disabled="@(Busy || theme.IsBuiltIn)" @onclick="() => DeleteAsync(theme.Id)">Xóa</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </aside>
+
+        <main class="theme-editor-pane card border-0 shadow-sm ct-panel">
+            <div class="card-body p-3 p-lg-4">
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                    <div>
+                        <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-pen-to-square"></i> CSS / SCSS editor</h2>
+                        <div class="ct-muted small">Đang sửa: <code>@EditFilePath</code></div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button class="btn btn-sm btn-outline-primary" type="button" disabled="@Busy" @onclick="PreviewAsync">Preview</button>
+                        <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@Busy" @onclick="ExportCurrentThemeFileAsync">Export file theme</button>
+                        <button class="btn btn-sm btn-outline-primary" type="button" disabled="@Busy" @onclick="ExportCurrentAppCssBundleAsync">Export CSS app hiện tại</button>
+                        <button class="btn btn-sm btn-outline-secondary" type="button" disabled="@Busy" @onclick="ExportThemeConfigAsync">Export themeconfig</button>
+                    </div>
+                </div>
+
+                <div class="theme-info-grid mb-3">
+                    <div>
+                        <label class="form-label small">Tên theme</label>
+                        <input class="form-control" @bind="EditForm.Name" />
+                    </div>
+                    <div>
+                        <label class="form-label small">File theme</label>
+                        <input class="form-control" @bind="EditForm.FileName" disabled="@EditForm.IsBuiltIn" />
+                        @if (EditForm.IsBuiltIn)
+                        {
+                            <div class="ct-muted small mt-1">Built-in theme không sửa tên file. Hãy nhân bản để tạo file custom.</div>
+                        }
+                    </div>
+                    <div>
+                        <label class="form-label small">Loại file</label>
+                        <select class="form-select" @bind="EditForm.FileType" disabled="@EditForm.IsBuiltIn">
+                            <option value="css">CSS</option>
+                            <option value="scss">SCSS</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label small">Shell class</label>
+                        <input class="form-control" @bind="EditForm.ShellClass" placeholder="theme-layout-comfortable theme-nav-pills" />
+                    </div>
+                    <div class="theme-info-wide">
+                        <label class="form-label small">Mô tả</label>
+                        <input class="form-control" @bind="EditForm.Description" />
+                    </div>
+                </div>
+
+                <div class="alert alert-info small">
+                    <b>Đúng cấu trúc mới:</b> file theme là <code>.css/.scss</code>. <code>themeconfig.json</code> chỉ lưu metadata: active theme, tên file, loại file, shell class, built-in/custom và thời điểm import/export.
+                </div>
+
+                <textarea class="form-control theme-code-editor" spellcheck="false" @bind="ThemeContent"></textarea>
+
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3">
+                    <div class="ct-muted small">
+                        Ký tự: @ThemeContent.Length · Active: <code>@(Config?.ActiveThemeId ?? "")</code> · Config: <code>@ConfigPath</code>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button class="btn btn-outline-secondary" type="button" disabled="@Busy" @onclick="PreviewAsync"><i class="fa-duotone fa-solid fa-eye"></i> Preview</button>
+                        <button class="btn btn-primary" type="button" disabled="@Busy" @onclick="SaveCurrentAsync"><i class="fa-duotone fa-solid fa-floppy-disk"></i> Lưu file</button>
+                        <button class="btn btn-success" type="button" disabled="@Busy" @onclick="SaveAndApplyAsync"><i class="fa-duotone fa-solid fa-check"></i> Lưu & áp dụng</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+@code {
+    private ThemeConfigFileDto? Config;
+    private List<ThemeFileItemDto> Themes = [];
+    private ThemeFileItemDto EditForm = new();
+    private string ThemeContent = string.Empty;
+    private string ConfigPath = string.Empty;
+    private string ThemesDirectory = string.Empty;
+    private string EditFilePath = string.Empty;
+    private string? StatusMessage;
+    private bool StatusIsError;
+    private bool Busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        await RunAsync(async () =>
+        {
+            var response = await ThemeService.LoadResponseAsync();
+            ApplyResponse(response);
+            await JS.InvokeVoidAsync("configToolTheme.applyCssText", response.ThemeCssText, response.ShellClass);
+            await EditThemeAsync(response.ActiveTheme.Id, false);
+            await JS.InvokeVoidAsync("configToolTheme.applyCssText", response.ThemeCssText, response.ShellClass);
+            SetStatus("Đã tải themeconfig.json và theme file.", false);
+        });
+    }
+
+    private void ApplyResponse(ThemeConfigResponseDto response)
+    {
+        Config = response.Config;
+        Themes = response.Config.Themes.OrderByDescending(x => x.Id == response.Config.ActiveThemeId).ThenBy(x => x.Name).ToList();
+        ConfigPath = response.ConfigFilePath;
+        ThemesDirectory = response.ThemesDirectory;
+    }
+
+    private void ApplyResult(ThemeActionResultDto result)
+    {
+        if (result.Config is not null)
+        {
+            Config = result.Config;
+            Themes = result.Config.Themes.OrderByDescending(x => x.Id == result.Config.ActiveThemeId).ThenBy(x => x.Name).ToList();
+        }
+
+        if (result.ActiveTheme is not null)
+        {
+            EditForm = Clone(result.ActiveTheme);
+            EditFilePath = result.ThemeFilePath;
+        }
+    }
+
+    private async Task EditThemeAsync(string themeId, bool showStatus = true)
+    {
+        await RunAsync(async () =>
+        {
+            var edit = await ThemeService.GetThemeForEditAsync(themeId);
+            EditForm = Clone(edit.Theme);
+            ThemeContent = edit.Content;
+            EditFilePath = edit.FilePath;
+            if (showStatus)
+            {
+                SetStatus("Đã mở file theme: " + edit.Theme.FileName, false);
+            }
+        });
+    }
+
+    private void CreateNewTheme()
+    {
+        var id = "custom-" + DateTimeOffset.Now.ToUnixTimeSeconds();
+        EditForm = new ThemeFileItemDto
+        {
+            Id = id,
+            Name = "Custom CSS theme",
+            Description = "Custom CSS theme file",
+            FileName = id + ".css",
+            FileType = "css",
+            IsScss = false,
+            ShellClass = "theme-layout-comfortable theme-nav-pills"
+        };
+        ThemeContent = DefaultCustomCss;
+        EditFilePath = "themes/" + EditForm.FileName;
+        SetStatus("Đã tạo form theme CSS mới, bấm Lưu file để ghi ra themes/*.css.", false);
+    }
+
+    private void CreateNewScssTheme()
+    {
+        var id = "custom-scss-" + DateTimeOffset.Now.ToUnixTimeSeconds();
+        EditForm = new ThemeFileItemDto
+        {
+            Id = id,
+            Name = "Custom SCSS theme",
+            Description = "Custom SCSS theme file",
+            FileName = id + ".scss",
+            FileType = "scss",
+            IsScss = true,
+            ShellClass = "theme-layout-comfortable theme-nav-pills"
+        };
+        ThemeContent = DefaultCustomScss;
+        EditFilePath = "themes/" + EditForm.FileName;
+        SetStatus("Đã tạo form theme SCSS mới, bấm Lưu file để ghi ra themes/*.scss.", false);
+    }
+
+    private async Task SaveCurrentAsync()
+    {
+        await SaveCoreAsync(false);
+    }
+
+    private async Task SaveAndApplyAsync()
+    {
+        await SaveCoreAsync(true);
+    }
+
+    private async Task SaveCoreAsync(bool setActive)
+    {
+        await RunAsync(async () =>
+        {
+            NormalizeEditFormExtension();
+            var result = await ThemeService.SaveThemeFileAsync(EditForm, ThemeContent, setActive);
+            ApplyResult(result);
+            if (result.Success)
+            {
+                if (setActive)
+                {
+                    await JS.InvokeVoidAsync("configToolTheme.applyCssText", result.ThemeCssText, result.ShellClass);
+                }
+                SetStatus(result.Message, false);
+            }
+            else
+            {
+                SetStatus(result.Message, true);
+            }
+        });
+    }
+
+    private async Task PreviewAsync()
+    {
+        await JS.InvokeVoidAsync("configToolTheme.applyCssText", ThemeContent, EditForm.ShellClass);
+        SetStatus("Đã preview nội dung CSS/SCSS hiện tại. Nếu dùng cú pháp SCSS nâng cao thì cần compile thành CSS trước khi runtime hiểu đủ.", false);
+    }
+
+    private async Task SetActiveAsync(string themeId)
+    {
+        await RunAsync(async () =>
+        {
+            var result = await ThemeService.SetActiveAsync(themeId);
+            ApplyResult(result);
+            if (result.Success)
+            {
+                await JS.InvokeVoidAsync("configToolTheme.applyCssText", result.ThemeCssText, result.ShellClass);
+                await EditThemeAsync(result.ActiveTheme?.Id ?? themeId, false);
+            }
+            SetStatus(result.Message, !result.Success);
+        });
+    }
+
+    private async Task DuplicateAsync(string themeId)
+    {
+        await RunAsync(async () =>
+        {
+            var result = await ThemeService.DuplicateThemeAsync(themeId);
+            ApplyResult(result);
+            if (result.Success && result.Config is not null)
+            {
+                var duplicate = result.Config.Themes.OrderByDescending(x => x.CreatedAt).FirstOrDefault(x => !x.IsBuiltIn);
+                if (duplicate is not null)
+                {
+                    await EditThemeAsync(duplicate.Id, false);
+                }
+            }
+            SetStatus(result.Message, !result.Success);
+        });
+    }
+
+    private async Task DeleteAsync(string themeId)
+    {
+        await RunAsync(async () =>
+        {
+            var result = await ThemeService.DeleteThemeAsync(themeId);
+            ApplyResult(result);
+            if (result.Success)
+            {
+                await JS.InvokeVoidAsync("configToolTheme.applyCssText", result.ThemeCssText, result.ShellClass);
+                await EditThemeAsync(result.ActiveTheme?.Id ?? Config?.ActiveThemeId ?? string.Empty, false);
+            }
+            SetStatus(result.Message, !result.Success);
+        });
+    }
+
+    private async Task ImportThemeAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            await using var stream = file.OpenReadStream(1024 * 1024 * 2);
+            using var reader = new StreamReader(stream);
+            var content = await reader.ReadToEndAsync();
+            var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+            if (ext == ".json")
+            {
+                ThemeContent = content;
+                SetStatus("Đã đọc JSON. Lưu ý themeconfig.json chỉ là metadata; để import theme thật hãy chọn file .css hoặc .scss.", false);
+                return;
+            }
+
+            var result = await ThemeService.ImportThemeFileAsync(Path.GetFileNameWithoutExtension(file.Name), file.Name, content, true);
+            ApplyResult(result);
+            if (result.Success)
+            {
+                await JS.InvokeVoidAsync("configToolTheme.applyCssText", result.ThemeCssText, result.ShellClass);
+                await EditThemeAsync(result.ActiveTheme?.Id ?? Config?.ActiveThemeId ?? string.Empty, false);
+            }
+            SetStatus(result.Message, !result.Success);
+        });
+    }
+
+    private async Task ExportCurrentThemeFileAsync()
+    {
+        var content = await ThemeService.ExportThemeFileAsync(EditForm.Id);
+        await JS.InvokeVoidAsync("configToolTheme.downloadText", EditForm.FileName, content, EditForm.IsScss ? "text/x-scss" : "text/css");
+        SetStatus("Đã export file theme: " + EditForm.FileName, false);
+    }
+
+    private async Task ExportThemeConfigAsync()
+    {
+        var json = await ThemeService.ExportConfigJsonAsync();
+        await JS.InvokeVoidAsync("configToolTheme.downloadText", "themeconfig.json", json, "application/json");
+        SetStatus("Đã export themeconfig.json.", false);
+    }
+
+    private async Task ExportCurrentAppCssBundleAsync()
+    {
+        var css = await ThemeService.ExportCurrentAppCssBundleAsync();
+        await JS.InvokeVoidAsync("configToolTheme.downloadText", "configtool-current-default.css", css, "text/css");
+        SetStatus("Đã export toàn bộ CSS/SCSS hiện tại app đang dùng thành 1 file theme mặc định.", false);
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        if (Busy) return;
+        Busy = true;
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, true);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private void NormalizeEditFormExtension()
+    {
+        var desiredExt = string.Equals(EditForm.FileType, "scss", StringComparison.OrdinalIgnoreCase) ? ".scss" : ".css";
+        var currentExt = Path.GetExtension(EditForm.FileName);
+        if (string.IsNullOrWhiteSpace(currentExt) || !string.Equals(currentExt, desiredExt, StringComparison.OrdinalIgnoreCase))
+        {
+            EditForm.FileName = Path.GetFileNameWithoutExtension(EditForm.FileName) + desiredExt;
+        }
+        EditForm.IsScss = desiredExt == ".scss";
+    }
+
+    private void SetStatus(string message, bool isError)
+    {
+        StatusMessage = message;
+        StatusIsError = isError;
+    }
+
+    private static ThemeFileItemDto Clone(ThemeFileItemDto value)
+    {
+        return new ThemeFileItemDto
+        {
+            Id = value.Id,
+            Name = value.Name,
+            Description = value.Description,
+            FileName = value.FileName,
+            FileType = value.FileType,
+            ShellClass = value.ShellClass,
+            IsBuiltIn = value.IsBuiltIn,
+            IsScss = value.IsScss,
+            CreatedAt = value.CreatedAt,
+            UpdatedAt = value.UpdatedAt
+        };
+    }
+
+    private const string DefaultCustomCss = """
+        :root {
+            --ct-bg: #f4f7fb;
+            --ct-card: #ffffff;
+            --ct-border: rgba(15, 23, 42, .09);
+            --ct-text: #14213d;
+            --ct-muted: #64748b;
+            --ct-primary: #4263eb;
+            --ct-primary-dark: #2f49c7;
+            --ct-green: #12b886;
+            --ct-red: #f03e3e;
+            --ct-orange: #f59f00;
+            --ct-sidebar: #0f172a;
+            --ct-sidebar-soft: rgba(255, 255, 255, .075);
+            --ct-radius: 22px;
+        }
+        .ct-topbar { background: rgba(255,255,255,.92); }
+        .ct-panel, .card { border-radius: var(--ct-radius) !important; }
+        """;
+
+    private const string DefaultCustomScss = """
+        $primary: #4263eb;
+        $accent: #20c997;
+
+        :root {
+            --ct-bg: #f4f7fb;
+            --ct-card: #ffffff;
+            --ct-border: rgba(15, 23, 42, .09);
+            --ct-text: #14213d;
+            --ct-muted: #64748b;
+            --ct-primary: #4263eb;
+            --ct-primary-dark: #2f49c7;
+            --ct-green: #12b886;
+            --ct-red: #f03e3e;
+            --ct-orange: #f59f00;
+            --ct-sidebar: #0f172a;
+            --ct-sidebar-soft: rgba(255, 255, 255, .075);
+            --ct-radius: 22px;
+        }
+
+        .ct-topbar { background: rgba(255,255,255,.92); }
+        .ct-panel, .card { border-radius: var(--ct-radius) !important; }
+        """;
+}

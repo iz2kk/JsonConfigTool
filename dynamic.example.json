@@ -1,0 +1,56 @@
+{
+  "publicIp": {
+    "lastIp": "",
+    "checkedAt": null,
+    "source": ""
+  },
+  "accounts": [
+    {
+      "id": "noip-local",
+      "provider": "noip",
+      "name": "No-IP home",
+      "username": "your-noip-username-or-ddns-id",
+      "password": "your-noip-password-or-ddns-key",
+      "enabled": true,
+      "note": "No-IP update endpoint uses dynupdate.no-ip.com/nic/update.",
+      "domains": [
+        {
+          "id": "home-noip",
+          "hostname": "yourhost.ddns.net",
+          "enabled": true,
+          "lastIp": "",
+          "lastStatus": "",
+          "lastMessage": "",
+          "lastUpdatedAt": null,
+          "updateCount": 0
+        }
+      ],
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-01T00:00:00+00:00"
+    },
+    {
+      "id": "dynu-local",
+      "provider": "dynu",
+      "name": "Dynu home",
+      "username": "your-dynu-username",
+      "password": "your-dynu-password",
+      "enabled": true,
+      "note": "Dynu update endpoint uses api.dynu.com/nic/update.",
+      "domains": [
+        {
+          "id": "home-dynu",
+          "hostname": "yourhost.dynu.net",
+          "enabled": true,
+          "lastIp": "",
+          "lastStatus": "",
+          "lastMessage": "",
+          "lastUpdatedAt": null,
+          "updateCount": 0
+        }
+      ],
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-01T00:00:00+00:00"
+    }
+  ],
+  "logs": []
+}

@@ -1,0 +1,25 @@
+:root {
+    color-scheme: light;
+    --ct-bg: #f4f7fb;
+    --ct-card: #ffffff;
+    --ct-surface-soft: #f8fafc;
+    --ct-border: rgba(15, 23, 42, .09);
+    --ct-text: #14213d;
+    --ct-muted: #64748b;
+    --ct-primary: #4263eb;
+    --ct-primary-dark: #2f49c7;
+    --ct-green: #12b886;
+    --ct-red: #f03e3e;
+    --ct-orange: #f59f00;
+    --ct-sidebar: #0f172a;
+    --ct-sidebar-soft: rgba(255, 255, 255, .075);
+    --ct-radius: 22px;
+    --ct-panel-padding: 16px;
+    --ct-main-max-width: none;
+    --ct-font-scale: 1;
+    --ct-shadow-strength: .08;
+}
+.ct-shell { font-size: calc(1rem * var(--ct-font-scale)); }
+.ct-topbar { background: rgba(255,255,255,.9); color: var(--ct-text); }
+.ct-main { max-width: var(--ct-main-max-width); }
+.ct-panel, .card { border-radius: var(--ct-radius) !important; }

@@ -1,0 +1,10 @@
+bin/*
+obj/*
+.vs/*
+bin
+obj
+rule.md
+rules.md
+*.zip
+docs
+docs/*

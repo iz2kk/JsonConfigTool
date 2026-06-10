@@ -1,0 +1,21 @@
+:root {
+  color-scheme: light;
+  --ct-bg: #f5f3ff;
+  --ct-card: #ffffff;
+  --ct-surface-soft: #faf5ff;
+  --ct-border: rgba(124, 58, 237, .18);
+  --ct-text: #2a1749;
+  --ct-muted: #73638d;
+  --ct-primary: #7c3aed;
+  --ct-primary-dark: #6d28d9;
+  --ct-green: #0d9488;
+  --ct-red: #e11d48;
+  --ct-orange: #ea580c;
+  --ct-radius: 24px;
+  --ct-main-max-width: 1840px;
+  --ct-font-scale: 1;
+}
+body, .ct-shell { background: linear-gradient(135deg, #f5f3ff 0%, #eff6ff 45%, #fff7ed 100%) !important; color: var(--ct-text) !important; }
+.ct-topbar, .card, .ct-panel, .ct-mini-box, .modal-content { background: rgba(255,255,255,.82) !important; backdrop-filter: blur(18px); color: var(--ct-text) !important; border-color: var(--ct-border) !important; }
+.btn-primary, .nav-pills .nav-link.active, .ct-nav-pill.active { background: linear-gradient(135deg, #7c3aed, #2563eb) !important; border-color: transparent !important; color: #fff !important; }
+.form-control, .form-select, .input-group-text { background: rgba(255,255,255,.9) !important; color: var(--ct-text) !important; border-color: rgba(124,58,237,.24) !important; }

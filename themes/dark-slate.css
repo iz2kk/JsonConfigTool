@@ -1,0 +1,33 @@
+:root {
+    color-scheme: dark;
+    --ct-bg: #07111f;
+    --ct-card: #101b2d;
+    --ct-surface-soft: #162338;
+    --ct-border: rgba(148, 163, 184, .2);
+    --ct-text: #e5edf8;
+    --ct-muted: #94a3b8;
+    --ct-primary: #38bdf8;
+    --ct-primary-dark: #0284c7;
+    --ct-green: #34d399;
+    --ct-red: #fb7185;
+    --ct-orange: #fbbf24;
+    --ct-sidebar: #020617;
+    --ct-sidebar-soft: rgba(56, 189, 248, .12);
+    --ct-radius: 20px;
+    --ct-panel-padding: 16px;
+    --ct-main-max-width: none;
+    --ct-font-scale: 1;
+    --ct-shadow-strength: .18;
+}
+body, .ct-shell { background: radial-gradient(circle at top left, rgba(56,189,248,.14), transparent 36%), var(--ct-bg); color: var(--ct-text); }
+.card, .ct-panel, .modal-content, .form-control, .form-select, .list-group-item { background: var(--ct-card) !important; color: var(--ct-text) !important; border-color: var(--ct-border) !important; }
+.ct-topbar { background: rgba(2, 6, 23, .9); color: var(--ct-text); }
+.ct-main { max-width: var(--ct-main-max-width); }
+.text-muted, .ct-muted { color: var(--ct-muted) !important; }
+
+/* SQL24 strong runtime overrides */
+body,.ct-shell{background:#07111f!important;color:#e5edf8!important;}
+.ct-topbar,.card,.ct-panel,.ct-mini-box,.modal-content,.form-control,.form-select,.input-group-text,.theme-list-card,.git-account-card,.git-file-row,.git-remote-file-row{background:#101b2d!important;color:#e5edf8!important;border-color:rgba(148,163,184,.22)!important;}
+.ct-muted,.text-muted,small{color:#94a3b8!important;}
+.btn-outline-secondary,.btn-light{background:#162338!important;color:#e5edf8!important;border-color:rgba(148,163,184,.28)!important;}
+.git-console{background:#020617!important;color:#dbeafe!important;}

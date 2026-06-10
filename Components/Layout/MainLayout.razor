@@ -1,0 +1,67 @@
+@inherits LayoutComponentBase
+@inject ThemeConfigService ThemeService
+
+@if (!string.IsNullOrWhiteSpace(ThemeCss))
+{
+    <style id="configtool-server-theme">@((MarkupString)ThemeCss)</style>
+}
+
+<div class="ct-shell @ThemeShellClass">
+    <header class="ct-topbar">
+        <div class="ct-topbar-inner">
+            <div class="ct-brand ct-brand-horizontal">
+                <div class="ct-brand-icon">
+                    <img src="/appicon.png" alt="" />
+                </div>
+                <div>
+                    <div class="ct-brand-title">Config Tool</div>
+                    <div class="ct-brand-subtitle">JSON, SQL, DNS, Git, Theme</div>
+                </div>
+            </div>
+
+            <nav class="ct-horizontal-nav" aria-label="Config tool navigation">
+                <NavLink class="ct-nav-pill" href="" Match="NavLinkMatch.All">
+                    <i class="fa-duotone fa-solid fa-table-list"></i> JSON
+                </NavLink>
+                <NavLink class="ct-nav-pill" href="sql">
+                    <i class="fa-duotone fa-solid fa-database"></i> SQL Admin
+                </NavLink>
+                <NavLink class="ct-nav-pill" href="dns">
+                    <i class="fa-duotone fa-solid fa-globe-pointer"></i> DNS Update
+                </NavLink>
+                <NavLink class="ct-nav-pill" href="git">
+                    <i class="fa-duotone fa-solid fa-code-branch"></i> Git
+                </NavLink>
+                <NavLink class="ct-nav-pill" href="theme">
+                    <i class="fa-duotone fa-solid fa-palette"></i> Theme
+                </NavLink>
+                <span class="ct-nav-pill"><i class="fa-duotone fa-solid fa-signal-stream"></i> SignalR Realtime</span>
+                <span class="ct-nav-pill"><i class="fa-duotone fa-solid fa-layer-group"></i> Bootstrap UI</span>
+            </nav>
+        </div>
+    </header>
+
+    <main class="ct-main">
+        @Body
+    </main>
+</div>
+
+@code {
+    private string ThemeCss = string.Empty;
+    private string ThemeShellClass = "theme-layout-comfortable theme-nav-pills";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var response = await ThemeService.LoadResponseAsync();
+            ThemeCss = response.ThemeCssText;
+            ThemeShellClass = response.ShellClass;
+        }
+        catch
+        {
+            ThemeCss = string.Empty;
+            ThemeShellClass = "theme-layout-comfortable theme-nav-pills";
+        }
+    }
+}

@@ -1,0 +1,52 @@
+<Project>
+  <!--
+    Output cleanup for ConfigTool.
+    - Do not let MAUI Resizetizer treat wwwroot images as MauiImage, avoiding appicon duplication.
+    - Remove unnecessary Debug logging package without editing the main csproj.
+    - Delete satellite resource language folders from Release/Publish output except vi/en.
+  -->
+
+  <ItemGroup>
+    <PackageReference Remove="Microsoft.Extensions.Logging.Debug" />
+
+    <!-- wwwroot belongs to Blazor static assets, not MAUI image resizing. -->
+    <MauiImage Remove="wwwroot\**\*.png" />
+    <MauiImage Remove="wwwroot\**\*.jpg" />
+    <MauiImage Remove="wwwroot\**\*.jpeg" />
+    <MauiImage Remove="wwwroot\**\*.gif" />
+    <MauiImage Remove="wwwroot\**\*.webp" />
+    <MauiImage Remove="wwwroot\**\*.svg" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <ConfigToolRemoveSymbolsFromRelease Condition="'$(ConfigToolRemoveSymbolsFromRelease)' == ''">true</ConfigToolRemoveSymbolsFromRelease>
+    <ConfigToolRemoveSatelliteFolders Condition="'$(ConfigToolRemoveSatelliteFolders)' == ''">true</ConfigToolRemoveSatelliteFolders>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Common .NET/NuGet satellite culture folders. vi/en are intentionally not listed. -->
+    <_ConfigToolKnownSatelliteCulture Include="af;am;ar;as;az;be;bg;bn;bs;ca;cs;cy;da;de;el;es;et;eu;fa;fi;fil;fr;ga;gl;gu;he;hi;hr;hu;hy;id;is;it;ja;ka;kk;km;kn;ko;kok;lo;lt;lv;mk;ml;mn;mr;ms;mt;nb;ne;nl;nn;or;pa;pl;pt;pt-BR;pt-PT;ro;ru;sk;sl;sq;sr;sr-Cyrl;sr-Latn;sv;sw;ta;te;th;tr;uk;ur;uz;zh;zh-CN;zh-Hans;zh-Hant;zh-TW" />
+  </ItemGroup>
+
+  <Target Name="ConfigToolSlimBuildOutput" AfterTargets="Build" Condition="'$(ConfigToolSlimOutput)' == 'true' and '$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <_ConfigToolBuildSatelliteDir Include="$(OutDir)%(_ConfigToolKnownSatelliteCulture.Identity)" />
+      <_ConfigToolReleaseSymbolFile Include="$(OutDir)**\*.pdb;$(OutDir)**\*.xml" />
+    </ItemGroup>
+
+    <Message Importance="high" Text="ConfigTool slim: cleaning satellite resource folders from $(OutDir)" Condition="'$(ConfigToolRemoveSatelliteFolders)' == 'true'" />
+    <RemoveDir Directories="@(_ConfigToolBuildSatelliteDir)" Condition="'$(ConfigToolRemoveSatelliteFolders)' == 'true' and Exists('%(_ConfigToolBuildSatelliteDir.Identity)')" />
+    <Delete Files="@(_ConfigToolReleaseSymbolFile)" Condition="'$(ConfigToolRemoveSymbolsFromRelease)' == 'true'" />
+  </Target>
+
+  <Target Name="ConfigToolSlimPublishOutput" AfterTargets="Publish" Condition="'$(ConfigToolSlimOutput)' == 'true' and '$(PublishDir)' != ''">
+    <ItemGroup>
+      <_ConfigToolPublishSatelliteDir Include="$(PublishDir)%(_ConfigToolKnownSatelliteCulture.Identity)" />
+      <_ConfigToolPublishSymbolFile Include="$(PublishDir)**\*.pdb;$(PublishDir)**\*.xml" />
+    </ItemGroup>
+
+    <Message Importance="high" Text="ConfigTool slim: cleaning satellite resource folders from $(PublishDir)" Condition="'$(ConfigToolRemoveSatelliteFolders)' == 'true'" />
+    <RemoveDir Directories="@(_ConfigToolPublishSatelliteDir)" Condition="'$(ConfigToolRemoveSatelliteFolders)' == 'true' and Exists('%(_ConfigToolPublishSatelliteDir.Identity)')" />
+    <Delete Files="@(_ConfigToolPublishSymbolFile)" Condition="'$(ConfigToolRemoveSymbolsFromRelease)' == 'true'" />
+  </Target>
+</Project>
