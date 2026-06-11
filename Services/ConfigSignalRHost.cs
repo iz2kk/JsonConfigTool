@@ -97,6 +97,8 @@ public sealed class ConfigSignalRHost : IAsyncDisposable
             builder.Services.AddSingleton(_operationCancellationService);
             builder.Services.AddSingleton<ConfigFileRealtimeHostedService>();
             builder.Services.AddHostedService(sp => sp.GetRequiredService<ConfigFileRealtimeHostedService>());
+            builder.Services.AddSingleton<DynamicDnsAutoUpdateHostedService>();
+            builder.Services.AddHostedService(sp => sp.GetRequiredService<DynamicDnsAutoUpdateHostedService>());
 
             _app = builder.Build();
             _app.MapHub<ConfigToolHub>("/config-hub");

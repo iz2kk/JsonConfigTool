@@ -3,16 +3,16 @@
 @inject ConfigSignalRHost SignalRHost
 @inject ILocalExplorerService Explorer
 
-<PageTitle>Dynamic DNS</PageTitle>
+<PageTitle>DNS Update</PageTitle>
 
 <div class="ct-page ct-dns-page">
     <section class="ct-hero card border-0 shadow-sm">
         <div class="card-body p-4">
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
                 <div>
-                    <div class="ct-eyebrow"><i class="fa-duotone fa-solid fa-globe-pointer"></i> Dynamic DNS</div>
-                    <h1 class="ct-title mb-2">No-IP & Dynu updater</h1>
-                    <p class="ct-muted mb-0">Multi tài khoản/domain, log update lưu trong <code>@(Dns?.DynamicFilePath ?? "startup/config/dynamic.json")</code>.</p>
+                    <div class="ct-eyebrow"><i class="fa-duotone fa-solid fa-globe-pointer"></i> DNS UPDATE</div>
+                    <h1 class="ct-title mb-2">No-IP · Dynu · Cloudflare updater</h1>
+                    <p class="ct-muted mb-0">Giữ mode nhập thủ công, thêm mode tự scan domain/zone/record rồi update A/AAAA. Log lưu trong <code>@(Dns?.DynamicFilePath ?? "startup/config/dynamic.json")</code>.</p>
                 </div>
                 <div class="d-flex flex-column align-items-lg-end gap-2">
                     <div class="ct-status-pill @(IsConnected ? "is-online" : "is-offline")">
@@ -41,11 +41,12 @@
             <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
                 <div>
                     <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-network-wired"></i> IP public thật</h2>
-                    <div class="ct-muted small">Lấy IP public rồi update bulk cho domain đã bật.</div>
+                    <div class="ct-muted small">Lấy IP public rồi update bulk cho record A/AAAA đã bật.</div>
                 </div>
                 <div class="d-flex flex-wrap gap-2">
                     <button type="button" class="btn btn-outline-primary" disabled="@Busy" @onclick="GetPublicIpAsync"><i class="fa-duotone fa-solid fa-location-crosshairs"></i> Lấy IP public</button>
-                    <button type="button" class="btn btn-success" disabled="@Busy" @onclick="() => BulkUpdateProviderAsync(ActiveProvider)"><i class="fa-duotone fa-solid fa-cloud-arrow-up"></i> Update bulk tab hiện tại</button>
+                    <button type="button" class="btn btn-outline-info" disabled="@Busy" @onclick="() => ScanProviderAsync(ActiveProvider)"><i class="fa-duotone fa-solid fa-radar"></i> Scan tab hiện tại</button>
+                    <button type="button" class="btn btn-success" disabled="@Busy" @onclick="() => BulkUpdateProviderAsync(ActiveProvider)"><i class="fa-duotone fa-solid fa-cloud-arrow-up"></i> Update tab hiện tại</button>
                     <button type="button" class="btn btn-outline-secondary" disabled="@Busy" @onclick="ReloadAsync"><i class="fa-duotone fa-solid fa-rotate"></i> Tải lại</button>
                 </div>
             </div>
@@ -69,21 +70,68 @@
 
     <section class="card border-0 shadow-sm ct-panel">
         <div class="card-body p-3 p-lg-4">
+            <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+                <div>
+                    <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid fa-clock-rotate-left"></i> Auto Update</h2>
+                    <div class="ct-muted small">Chạy nền khi trang DNS đã mở SignalR host. Có thể chọn scan trước rồi update khi IP đổi.</div>
+                </div>
+                <button type="button" class="btn btn-sm btn-primary" disabled="@Busy" @onclick="SaveAutoUpdateAsync"><i class="fa-duotone fa-solid fa-floppy-disk"></i> Lưu Auto Update</button>
+            </div>
+
+            <div class="row g-3 align-items-end">
+                <div class="col-12 col-lg-3">
+                    <div class="form-check form-switch ct-mini-box h-100">
+                        <input class="form-check-input" type="checkbox" id="autoEnabled" @bind="AutoForm.Enabled" />
+                        <label class="form-check-label fw-semibold" for="autoEnabled">Bật auto update</label>
+                        <div class="ct-muted small mt-1">Tự lấy IP public và update record đã bật.</div>
+                    </div>
+                </div>
+                <div class="col-12 col-lg-2">
+                    <label class="form-label">Chu kỳ phút</label>
+                    <input class="form-control" type="number" min="1" max="1440" @bind="AutoForm.IntervalMinutes" />
+                </div>
+                <div class="col-12 col-lg-3">
+                    <div class="form-check form-switch ct-mini-box h-100">
+                        <input class="form-check-input" type="checkbox" id="autoOnlyChange" @bind="AutoForm.UpdateOnlyWhenIpChanged" />
+                        <label class="form-check-label fw-semibold" for="autoOnlyChange">Chỉ update khi IP đổi</label>
+                        <div class="ct-muted small mt-1">Tránh spam API nếu IP không đổi.</div>
+                    </div>
+                </div>
+                <div class="col-12 col-lg-3">
+                    <div class="form-check form-switch ct-mini-box h-100">
+                        <input class="form-check-input" type="checkbox" id="autoScanBefore" @bind="AutoForm.ScanBeforeUpdate" />
+                        <label class="form-check-label fw-semibold" for="autoScanBefore">Scan trước khi update</label>
+                        <div class="ct-muted small mt-1">Mode 2: tự scan domain/record rồi update.</div>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <div class="ct-mini-box">
+                        <strong>Trạng thái:</strong> @DisplayOr(Dns?.Config.AutoUpdate.LastStatus, "-") · @DisplayOr(Dns?.Config.AutoUpdate.LastMessage, "chưa chạy") · Lần chạy: @FormatDate(Dns?.Config.AutoUpdate.LastRunAt)
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="card border-0 shadow-sm ct-panel">
+        <div class="card-body p-3 p-lg-4">
             <ul class="nav nav-pills ct-sql-tabs mb-3" role="tablist">
                 <li class="nav-item"><button type="button" class="nav-link @(ActiveProvider == "noip" ? "active" : null)" @onclick='() => SetProvider("noip")'><i class="fa-duotone fa-solid fa-cloud"></i> No-IP.org</button></li>
                 <li class="nav-item"><button type="button" class="nav-link @(ActiveProvider == "dynu" ? "active" : null)" @onclick='() => SetProvider("dynu")'><i class="fa-duotone fa-solid fa-globe"></i> Dynu.com</button></li>
+                <li class="nav-item"><button type="button" class="nav-link @(ActiveProvider == "cloudflare" ? "active" : null)" @onclick='() => SetProvider("cloudflare")'><i class="fa-duotone fa-solid fa-shield-cloud"></i> Cloudflare</button></li>
             </ul>
 
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
                 <div>
                     <h2 class="ct-section-title mb-1"><i class="fa-duotone fa-solid @ProviderIcon(ActiveProvider)"></i> @ProviderTitle(ActiveProvider)</h2>
-                    <div class="ct-muted small">Thêm/sửa tài khoản, thêm domain cho từng tài khoản, update lẻ hoặc bulk.</div>
+                    <div class="ct-muted small">Mode 1: nhập hostname thủ công. Mode 2: scan domain/zone/record từ API rồi update đúng A/AAAA.</div>
                 </div>
                 <div class="d-flex flex-wrap gap-2">
                     <div class="input-group input-group-sm ct-dns-search-box">
                         <span class="input-group-text"><i class="fa-duotone fa-solid fa-magnifying-glass"></i></span>
-                        <input class="form-control" placeholder="Tìm tài khoản/domain/log..." value="@SearchText" @oninput="OnSearchInput" />
+                        <input class="form-control" placeholder="Tìm tài khoản/domain/record/log..." value="@SearchText" @oninput="OnSearchInput" />
                     </div>
+                    <button type="button" class="btn btn-sm btn-outline-info" disabled="@Busy" @onclick="() => ScanProviderAsync(ActiveProvider)"><i class="fa-duotone fa-solid fa-radar"></i> Scan provider</button>
                     <button type="button" class="btn btn-sm btn-primary" @onclick="OpenCreateAccountModal"><i class="fa-duotone fa-solid fa-user-plus"></i> Thêm tài khoản</button>
                 </div>
             </div>
@@ -100,32 +148,39 @@
                         <div class="ct-dns-account-head">
                             <div>
                                 <strong><i class="fa-duotone fa-solid @ProviderIcon(account.Provider)"></i> @account.Name</strong>
-                                <div class="ct-muted small">@account.Username · @account.Domains.Count domain</div>
+                                <div class="ct-muted small">@AccountSubTitle(account) · @account.Domains.Count record</div>
                             </div>
                             <div class="d-flex flex-wrap gap-1">
                                 <span class="badge @(account.Enabled ? "text-bg-success" : "text-bg-secondary")">@(account.Enabled ? "Enabled" : "Disabled")</span>
                                 <span class="badge text-bg-light border">@ProviderTitle(account.Provider)</span>
+                                <span class="badge text-bg-light border">@AuthModeTitle(account)</span>
                             </div>
                         </div>
 
                         <div class="ct-dns-actions">
                             <button type="button" class="btn btn-sm btn-outline-primary" @onclick="() => OpenEditAccountModal(account)"><i class="fa-duotone fa-solid fa-pen"></i> Sửa</button>
+                            @if (NormalizeProvider(account.Provider) == "dynu" && NormalizeAuthMode(account) == "oauth2")
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-warning" disabled="@Busy" @onclick="() => AuthorizeAccountAsync(account)"><i class="fa-duotone fa-solid fa-key"></i> OAuth</button>
+                            }
+                            <button type="button" class="btn btn-sm btn-outline-info" disabled="@Busy" @onclick="() => ScanAccountAsync(account)"><i class="fa-duotone fa-solid fa-radar"></i> Scan</button>
                             <button type="button" class="btn btn-sm btn-outline-success" disabled="@Busy" @onclick="() => BulkUpdateAccountAsync(account)"><i class="fa-duotone fa-solid fa-cloud-arrow-up"></i> Update account</button>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenCreateDomainModal(account)"><i class="fa-duotone fa-solid fa-link"></i> Thêm domain</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => OpenCreateDomainModal(account)"><i class="fa-duotone fa-solid fa-link"></i> Thêm thủ công</button>
                             <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => OpenDeleteAccountModal(account)"><i class="fa-duotone fa-solid fa-trash-can"></i> Xóa</button>
                         </div>
 
                         <div class="ct-dns-domain-list">
                             @if (account.Domains.Count == 0)
                             {
-                                <div class="ct-empty-inline small"><i class="fa-duotone fa-solid fa-circle-info"></i> Chưa có domain trong tài khoản này.</div>
+                                <div class="ct-empty-inline small"><i class="fa-duotone fa-solid fa-circle-info"></i> Chưa có record trong tài khoản này. Bấm Scan hoặc thêm thủ công.</div>
                             }
-                            @foreach (var domain in account.Domains.Where(MatchesSearch))
+                            @foreach (var domain in account.Domains.Where(MatchesSearch).OrderBy(x => x.ZoneName).ThenBy(x => x.Hostname).ThenBy(x => x.RecordType))
                             {
                                 <div class="ct-dns-domain-row" @key="domain.Id">
                                     <div>
-                                        <strong><i class="fa-duotone fa-solid fa-globe-pointer"></i> @domain.Hostname</strong>
-                                        <div class="ct-muted small">IP: @DisplayOr(domain.LastIp, "-") · @FormatDate(domain.LastUpdatedAt)</div>
+                                        <strong><i class="fa-duotone fa-solid fa-globe-pointer"></i> @domain.Hostname <span class="badge text-bg-light border">@DisplayOr(domain.RecordType, "A")</span></strong>
+                                        <div class="ct-muted small">IP: @DisplayOr(domain.LastIp, "-") · Update: @FormatDate(domain.LastUpdatedAt) · Scan: @FormatDate(domain.LastScannedAt)</div>
+                                        <div class="ct-muted small">Zone: @DisplayOr(domain.ZoneName, "-") · RecordId: @ShortId(domain.RecordId) · Source: @DisplayOr(domain.ScanSource, "manual")</div>
                                         <div class="small @DomainStatusCss(domain)">@domain.LastStatus @domain.LastMessage</div>
                                     </div>
                                     <div class="ct-dns-domain-actions">
@@ -154,7 +209,7 @@
             </div>
             <div class="ct-dns-log-table table-responsive">
                 <table class="table table-sm align-middle mb-0">
-                    <thead><tr><th>Thời gian</th><th>Provider</th><th>Tài khoản</th><th>Domain</th><th>IP</th><th>Kết quả</th></tr></thead>
+                    <thead><tr><th>Thời gian</th><th>Provider</th><th>Tài khoản</th><th>Domain</th><th>Type</th><th>IP</th><th>Kết quả</th></tr></thead>
                     <tbody>
                     @foreach (var log in FilteredLogs.Take(120))
                     {
@@ -163,6 +218,7 @@
                             <td><span class="badge text-bg-light border">@ProviderTitle(log.Provider)</span></td>
                             <td>@log.AccountName</td>
                             <td>@log.Hostname</td>
+                            <td>@DisplayOr(log.RecordType, "-")</td>
                             <td><code>@log.Ip</code></td>
                             <td><span class="badge @(log.Success ? "text-bg-success" : "text-bg-danger")">@(log.Success ? "OK" : "FAIL")</span> <span class="small">@log.Message</span></td>
                         </tr>
@@ -186,7 +242,7 @@
                 <div class="modal-body">
                     @if (AccountDeleteMode)
                     {
-                        <div class="alert alert-danger">Xóa tài khoản <strong>@AccountForm.Name</strong> và toàn bộ domain bên trong?</div>
+                        <div class="alert alert-danger">Xóa tài khoản <strong>@AccountForm.Name</strong> và toàn bộ record bên trong?</div>
                     }
                     else
                     {
@@ -196,11 +252,17 @@
                                 <select class="form-select" @bind="AccountForm.Provider">
                                     <option value="noip">No-IP.org</option>
                                     <option value="dynu">Dynu.com</option>
+                                    <option value="cloudflare">Cloudflare</option>
                                 </select>
                             </div>
                             <div class="col-12 col-lg-4">
-                                <label class="form-label">Tên hiển thị</label>
-                                <input class="form-control" @bind="AccountForm.Name" />
+                                <label class="form-label">Auth mode</label>
+                                <select class="form-select" @bind="AccountForm.AuthMode">
+                                    <option value="basic">Username/password hoặc DDNS key</option>
+                                    <option value="api-key">API Key</option>
+                                    <option value="oauth2">OAuth2 client_id/secret</option>
+                                    <option value="api-token">API Token</option>
+                                </select>
                             </div>
                             <div class="col-12 col-lg-4 d-flex align-items-end">
                                 <div class="form-check form-switch">
@@ -209,12 +271,34 @@
                                 </div>
                             </div>
                             <div class="col-12 col-lg-6">
-                                <label class="form-label">Tài khoản / DDNS ID</label>
+                                <label class="form-label">Tên hiển thị</label>
+                                <input class="form-control" @bind="AccountForm.Name" />
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">API Key / API Token</label>
+                                <input class="form-control" autocomplete="off" placeholder="Cloudflare token, Dynu API-Key, No-IP sk_..." @bind="AccountForm.ApiKey" />
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">Username / DDNS ID</label>
                                 <input class="form-control" autocomplete="username" @bind="AccountForm.Username" />
                             </div>
                             <div class="col-12 col-lg-6">
-                                <label class="form-label">Mật khẩu / DDNS key</label>
+                                <label class="form-label">Password / DDNS key</label>
                                 <input class="form-control" type="password" autocomplete="current-password" @bind="AccountForm.Password" />
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">Dynu OAuth client_id</label>
+                                <input class="form-control" autocomplete="off" @bind="AccountForm.OAuthClientId" />
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">Dynu OAuth secret</label>
+                                <input class="form-control" type="password" autocomplete="off" @bind="AccountForm.OAuthSecret" />
+                            </div>
+                            <div class="col-12">
+                                <div class="ct-mini-box">
+                                    <div class="fw-semibold mb-1"><i class="fa-duotone fa-solid fa-circle-info"></i> Gợi ý</div>
+                                    <div class="small">Cloudflare dùng API Token. Dynu có API-Key hoặc OAuth2. No-IP scan dùng API Key, update DDNS dùng username/password hoặc DDNS key.</div>
+                                </div>
                             </div>
                             <div class="col-12">
                                 <label class="form-label">Ghi chú</label>
@@ -247,25 +331,48 @@
                 <div class="modal-body">
                     @if (DomainDeleteMode)
                     {
-                        <div class="alert alert-danger">Xóa domain <strong>@DomainForm.Hostname</strong> khỏi tài khoản <strong>@(DomainAccount?.Name)</strong>?</div>
+                        <div class="alert alert-danger">Xóa record <strong>@DomainForm.Hostname</strong> khỏi tài khoản <strong>@(DomainAccount?.Name)</strong>?</div>
                     }
                     else
                     {
                         <div class="row g-3">
-                            <div class="col-12 col-lg-8">
+                            <div class="col-12 col-lg-5">
                                 <label class="form-label">Domain / hostname</label>
                                 <input class="form-control form-control-lg" placeholder="vd: home.example.ddns.net" @bind="DomainForm.Hostname" />
                             </div>
-                            <div class="col-12 col-lg-4 d-flex align-items-end">
+                            <div class="col-12 col-lg-2">
+                                <label class="form-label">Type</label>
+                                <select class="form-select form-select-lg" @bind="DomainForm.RecordType">
+                                    <option value="A">A</option>
+                                    <option value="AAAA">AAAA</option>
+                                </select>
+                            </div>
+                            <div class="col-12 col-lg-5 d-flex align-items-end">
                                 <div class="form-check form-switch">
                                     <input class="form-check-input" type="checkbox" id="domainEnabled" @bind="DomainForm.Enabled" />
-                                    <label class="form-check-label" for="domainEnabled">Bật update domain này</label>
+                                    <label class="form-check-label" for="domainEnabled">Bật update record này</label>
                                 </div>
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">Zone name</label>
+                                <input class="form-control" placeholder="Cloudflare/no-ip zone, có thể bỏ trống nếu nhập thủ công" @bind="DomainForm.ZoneName" />
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">Record name</label>
+                                <input class="form-control" placeholder="Tên record từ API scan" @bind="DomainForm.RecordName" />
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">Zone ID</label>
+                                <input class="form-control" @bind="DomainForm.ZoneId" />
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <label class="form-label">Record ID</label>
+                                <input class="form-control" @bind="DomainForm.RecordId" />
                             </div>
                             <div class="col-12">
                                 <div class="ct-mini-box">
                                     <div class="fw-semibold mb-1"><i class="fa-duotone fa-solid fa-circle-info"></i> Tài khoản</div>
-                                    <div>@(DomainAccount?.Name) · @ProviderTitle(DomainAccount?.Provider ?? ActiveProvider) · @(DomainAccount?.Username)</div>
+                                    <div>@(DomainAccount?.Name) · @ProviderTitle(DomainAccount?.Provider ?? ActiveProvider) · @AccountSubTitle(DomainAccount)</div>
                                 </div>
                             </div>
                         </div>
@@ -288,6 +395,7 @@
     private IDisposable? DnsChangedSubscription;
     private IDisposable? DnsSoftErrorSubscription;
     private DynamicDnsResponseDto? Dns;
+    private DynamicDnsAutoUpdateDto AutoForm = new();
     private string ActiveProvider = "noip";
     private string SearchText = string.Empty;
     private string? StatusMessage;
@@ -334,6 +442,7 @@
                 InvokeAsync(() =>
                 {
                     Dns = snapshot;
+                    AutoForm = CloneAuto(snapshot.Config.AutoUpdate);
                     StatusOk(message);
                     StateHasChanged();
                 }));
@@ -364,6 +473,7 @@
         try
         {
             Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+            AutoForm = CloneAuto(Dns.Config.AutoUpdate);
             StatusOk("Đã tải dynamic.json.");
         }
         catch (Exception ex)
@@ -386,6 +496,86 @@
             if (result.Success) StatusOk("IP public: " + result.Message);
             else StatusError(result.Message);
             Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+            AutoForm = CloneAuto(Dns.Config.AutoUpdate);
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task SaveAutoUpdateAsync()
+    {
+        if (Hub is null) return;
+        Busy = true;
+        try
+        {
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("SaveDynamicDnsAutoUpdateAsync", AutoForm);
+            if (result.Success) StatusOk(result.Message);
+            else StatusError(result.Message);
+            Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+            AutoForm = CloneAuto(Dns.Config.AutoUpdate);
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task ScanProviderAsync(string provider)
+    {
+        await ScanAsync(new DynamicDnsScanRequest { Provider = provider, OnlyEnabled = true, SaveToConfig = true });
+    }
+
+    private async Task ScanAccountAsync(DynamicDnsAccountDto account)
+    {
+        await ScanAsync(new DynamicDnsScanRequest { Provider = account.Provider, AccountId = account.Id, OnlyEnabled = false, SaveToConfig = true });
+    }
+
+    private async Task ScanAsync(DynamicDnsScanRequest request)
+    {
+        if (Hub is null) return;
+        Busy = true;
+        try
+        {
+            var result = await Hub.InvokeAsync<DynamicDnsScanResultDto>("ScanDynamicDnsAsync", request);
+            if (result.Snapshot is not null)
+            {
+                Dns = result.Snapshot;
+                AutoForm = CloneAuto(Dns.Config.AutoUpdate);
+            }
+            if (result.Success) StatusOk(result.Message);
+            else StatusError(result.Message);
+        }
+        catch (Exception ex)
+        {
+            StatusError(ex.Message);
+        }
+        finally
+        {
+            Busy = false;
+        }
+    }
+
+    private async Task AuthorizeAccountAsync(DynamicDnsAccountDto account)
+    {
+        if (Hub is null) return;
+        Busy = true;
+        try
+        {
+            var result = await Hub.InvokeAsync<SqlActionResultDto>("AuthorizeDynamicDnsAccountAsync", account.Id);
+            if (result.Success) StatusOk(result.Message);
+            else StatusError(result.Message);
+            Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+            AutoForm = CloneAuto(Dns.Config.AutoUpdate);
         }
         catch (Exception ex)
         {
@@ -419,7 +609,11 @@
         try
         {
             var result = await Hub.InvokeAsync<DynamicDnsBulkUpdateResultDto>("UpdateDynamicDnsAsync", request);
-            if (result.Snapshot is not null) Dns = result.Snapshot;
+            if (result.Snapshot is not null)
+            {
+                Dns = result.Snapshot;
+                AutoForm = CloneAuto(Dns.Config.AutoUpdate);
+            }
             if (result.Success) StatusOk(result.Message);
             else StatusError(result.Message);
         }
@@ -448,21 +642,22 @@
         return Contains(account.Name, q)
             || Contains(account.Username, q)
             || Contains(account.Note, q)
-            || account.Domains.Any(x => Contains(x.Hostname, q) || Contains(x.LastIp, q) || Contains(x.LastMessage, q));
+            || Contains(account.ApiKey, q)
+            || account.Domains.Any(x => Contains(x.Hostname, q) || Contains(x.ZoneName, q) || Contains(x.RecordType, q) || Contains(x.LastIp, q) || Contains(x.LastMessage, q));
     }
 
     private bool MatchesSearch(DynamicDnsDomainDto domain)
     {
         if (string.IsNullOrWhiteSpace(SearchText)) return true;
         var q = SearchText.Trim();
-        return Contains(domain.Hostname, q) || Contains(domain.LastIp, q) || Contains(domain.LastMessage, q) || Contains(domain.LastStatus, q);
+        return Contains(domain.Hostname, q) || Contains(domain.ZoneName, q) || Contains(domain.RecordName, q) || Contains(domain.RecordType, q) || Contains(domain.LastIp, q) || Contains(domain.LastMessage, q) || Contains(domain.LastStatus, q);
     }
 
     private bool MatchesSearch(DynamicDnsLogDto log)
     {
         if (string.IsNullOrWhiteSpace(SearchText)) return true;
         var q = SearchText.Trim();
-        return Contains(log.AccountName, q) || Contains(log.Hostname, q) || Contains(log.Ip, q) || Contains(log.Message, q) || Contains(log.Status, q);
+        return Contains(log.AccountName, q) || Contains(log.Hostname, q) || Contains(log.RecordType, q) || Contains(log.Ip, q) || Contains(log.Message, q) || Contains(log.Status, q);
     }
 
     private static bool Contains(string? value, string query) => (value ?? string.Empty).Contains(query, StringComparison.OrdinalIgnoreCase);
@@ -471,7 +666,7 @@
     {
         AccountDeleteMode = false;
         AccountModalTitle = "Thêm tài khoản " + ProviderTitle(ActiveProvider);
-        AccountForm = new DynamicDnsAccountDto { Provider = ActiveProvider, Name = ProviderTitle(ActiveProvider) + " account", Enabled = true };
+        AccountForm = new DynamicDnsAccountDto { Provider = ActiveProvider, AuthMode = DefaultAuthMode(ActiveProvider), Name = ProviderTitle(ActiveProvider) + " account", Enabled = true };
         ShowAccountModal = true;
     }
 
@@ -504,6 +699,8 @@
             }
             else
             {
+                AccountForm.Provider = NormalizeProvider(AccountForm.Provider);
+                AccountForm.AuthMode = NormalizeAuthMode(AccountForm);
                 result = await Hub.InvokeAsync<SqlActionResultDto>("SaveDynamicDnsAccountAsync", AccountForm);
             }
 
@@ -512,6 +709,7 @@
                 StatusOk(result.Message);
                 CloseAccountModal();
                 Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+                AutoForm = CloneAuto(Dns.Config.AutoUpdate);
             }
             else
             {
@@ -537,16 +735,16 @@
     private void OpenCreateDomainModal(DynamicDnsAccountDto account)
     {
         DomainDeleteMode = false;
-        DomainModalTitle = "Thêm domain cho " + account.Name;
+        DomainModalTitle = "Thêm record thủ công cho " + account.Name;
         DomainAccount = account;
-        DomainForm = new DynamicDnsDomainDto { Enabled = true };
+        DomainForm = new DynamicDnsDomainDto { Enabled = true, RecordType = "A", ScanSource = "manual" };
         ShowDomainModal = true;
     }
 
     private void OpenEditDomainModal(DynamicDnsAccountDto account, DynamicDnsDomainDto domain)
     {
         DomainDeleteMode = false;
-        DomainModalTitle = "Sửa domain " + domain.Hostname;
+        DomainModalTitle = "Sửa record " + domain.Hostname;
         DomainAccount = account;
         DomainForm = CloneDomain(domain);
         ShowDomainModal = true;
@@ -555,7 +753,7 @@
     private void OpenDeleteDomainModal(DynamicDnsAccountDto account, DynamicDnsDomainDto domain)
     {
         DomainDeleteMode = true;
-        DomainModalTitle = "Xóa domain " + domain.Hostname;
+        DomainModalTitle = "Xóa record " + domain.Hostname;
         DomainAccount = account;
         DomainForm = CloneDomain(domain);
         ShowDomainModal = true;
@@ -586,6 +784,7 @@
                 StatusOk(result.Message);
                 CloseDomainModal();
                 Dns = await Hub.InvokeAsync<DynamicDnsResponseDto>("GetDynamicDnsAsync");
+                AutoForm = CloneAuto(Dns.Config.AutoUpdate);
             }
             else
             {
@@ -638,27 +837,106 @@
     private static string NormalizeProvider(string? provider)
     {
         provider = (provider ?? string.Empty).Trim().ToLowerInvariant();
-        return provider is "dynu" or "dynu.com" ? "dynu" : "noip";
+        return provider switch
+        {
+            "dynu" or "dynu.com" => "dynu",
+            "cloudflare" or "cf" => "cloudflare",
+            _ => "noip"
+        };
     }
 
-    private static string ProviderTitle(string provider) => NormalizeProvider(provider) == "dynu" ? "Dynu.com" : "No-IP.org";
-    private static string ProviderIcon(string provider) => NormalizeProvider(provider) == "dynu" ? "fa-globe" : "fa-cloud";
+    private static string NormalizeAuthMode(DynamicDnsAccountDto? account)
+    {
+        if (account is null) return "basic";
+        var provider = NormalizeProvider(account.Provider);
+        var mode = (account.AuthMode ?? string.Empty).Trim().ToLowerInvariant();
+        return provider switch
+        {
+            "cloudflare" => "api-token",
+            "dynu" when mode is "oauth" or "oauth2" => "oauth2",
+            "dynu" when mode is "apikey" or "api-key" => "api-key",
+            "noip" when mode is "apikey" or "api-key" => "api-key",
+            _ => "basic"
+        };
+    }
+
+    private static string DefaultAuthMode(string provider) => NormalizeProvider(provider) switch
+    {
+        "dynu" => "oauth2",
+        "cloudflare" => "api-token",
+        _ => "basic"
+    };
+
+    private static string ProviderTitle(string provider) => NormalizeProvider(provider) switch
+    {
+        "dynu" => "Dynu.com",
+        "cloudflare" => "Cloudflare",
+        _ => "No-IP.org"
+    };
+
+    private static string ProviderIcon(string provider) => NormalizeProvider(provider) switch
+    {
+        "dynu" => "fa-globe",
+        "cloudflare" => "fa-shield-cloud",
+        _ => "fa-cloud"
+    };
+
+    private static string AuthModeTitle(DynamicDnsAccountDto account) => NormalizeAuthMode(account) switch
+    {
+        "oauth2" => "OAuth2",
+        "api-key" => "API Key",
+        "api-token" => "API Token",
+        _ => "Basic/DDNS"
+    };
+
+    private static string AccountSubTitle(DynamicDnsAccountDto? account)
+    {
+        if (account is null) return "-";
+        var provider = NormalizeProvider(account.Provider);
+        if (provider == "cloudflare") return string.IsNullOrWhiteSpace(account.ApiKey) ? "Chưa nhập API token" : "API token đã nhập";
+        if (provider == "dynu" && NormalizeAuthMode(account) == "oauth2") return string.IsNullOrWhiteSpace(account.AccessToken) ? "OAuth chưa lấy token" : "OAuth token hết hạn: " + FormatDate(account.AccessTokenExpiresAt);
+        if (!string.IsNullOrWhiteSpace(account.Username)) return account.Username;
+        if (!string.IsNullOrWhiteSpace(account.ApiKey)) return "API key đã nhập";
+        return "Chưa nhập auth";
+    }
+
     private static string DomainStatusCss(DynamicDnsDomainDto domain)
-        => (domain.LastStatus.Contains("OK", StringComparison.OrdinalIgnoreCase) || domain.LastStatus.Contains("200", StringComparison.OrdinalIgnoreCase) || domain.LastMessage.Contains("good", StringComparison.OrdinalIgnoreCase) || domain.LastMessage.Contains("nochg", StringComparison.OrdinalIgnoreCase))
+        => (domain.LastStatus.Contains("OK", StringComparison.OrdinalIgnoreCase) || domain.LastStatus.Contains("200", StringComparison.OrdinalIgnoreCase) || domain.LastMessage.Contains("good", StringComparison.OrdinalIgnoreCase) || domain.LastMessage.Contains("nochg", StringComparison.OrdinalIgnoreCase) || domain.LastMessage.Contains("success", StringComparison.OrdinalIgnoreCase))
             ? "text-success"
             : "text-muted";
 
     private static string FormatDate(DateTimeOffset? value) => value is null ? "-" : value.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
     private static string FormatDate(DateTimeOffset value) => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
     private static string DisplayOr(string? value, string fallback) => string.IsNullOrWhiteSpace(value) ? fallback : value;
+    private static string ShortId(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : (value.Length <= 10 ? value : value[..10] + "…");
+
+    private static DynamicDnsAutoUpdateDto CloneAuto(DynamicDnsAutoUpdateDto? settings) => new()
+    {
+        Enabled = settings?.Enabled ?? false,
+        IntervalMinutes = NormalizeInterval(settings?.IntervalMinutes),
+        UpdateOnlyWhenIpChanged = settings?.UpdateOnlyWhenIpChanged ?? true,
+        ScanBeforeUpdate = settings?.ScanBeforeUpdate ?? false,
+        LastRunAt = settings?.LastRunAt,
+        LastIp = settings?.LastIp ?? string.Empty,
+        LastStatus = settings?.LastStatus ?? string.Empty,
+        LastMessage = settings?.LastMessage ?? string.Empty
+    };
+
+    private static int NormalizeInterval(int? value) => value is null or <= 0 ? 10 : Math.Clamp(value.Value, 1, 1440);
 
     private static DynamicDnsAccountDto CloneAccount(DynamicDnsAccountDto account, bool includeDomains) => new()
     {
         Id = account.Id,
         Provider = NormalizeProvider(account.Provider),
         Name = account.Name,
+        AuthMode = NormalizeAuthMode(account),
         Username = account.Username,
         Password = account.Password,
+        ApiKey = account.ApiKey,
+        OAuthClientId = account.OAuthClientId,
+        OAuthSecret = account.OAuthSecret,
+        AccessToken = account.AccessToken,
+        AccessTokenExpiresAt = account.AccessTokenExpiresAt,
         Enabled = account.Enabled,
         Note = account.Note,
         CreatedAt = account.CreatedAt,
@@ -670,11 +948,20 @@
     {
         Id = domain.Id,
         Hostname = domain.Hostname,
+        ZoneName = domain.ZoneName,
+        ZoneId = domain.ZoneId,
+        RecordId = domain.RecordId,
+        RecordName = domain.RecordName,
+        RecordType = string.IsNullOrWhiteSpace(domain.RecordType) ? "A" : domain.RecordType,
+        Ttl = domain.Ttl,
+        Proxied = domain.Proxied,
+        ScanSource = domain.ScanSource,
         Enabled = domain.Enabled,
         LastIp = domain.LastIp,
         LastStatus = domain.LastStatus,
         LastMessage = domain.LastMessage,
         LastUpdatedAt = domain.LastUpdatedAt,
+        LastScannedAt = domain.LastScannedAt,
         UpdateCount = domain.UpdateCount
     };
 
@@ -688,4 +975,3 @@
         }
     }
 }
-

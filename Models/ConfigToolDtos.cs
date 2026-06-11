@@ -586,6 +586,9 @@ public sealed class DynamicDnsConfigDto
     [JsonPropertyName("publicIp")]
     public DynamicDnsPublicIpDto PublicIp { get; set; } = new();
 
+    [JsonPropertyName("autoUpdate")]
+    public DynamicDnsAutoUpdateDto AutoUpdate { get; set; } = new();
+
     [JsonPropertyName("accounts")]
     public List<DynamicDnsAccountDto> Accounts { get; set; } = [];
 
@@ -605,6 +608,33 @@ public sealed class DynamicDnsPublicIpDto
     public string Source { get; set; } = string.Empty;
 }
 
+public sealed class DynamicDnsAutoUpdateDto
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("intervalMinutes")]
+    public int IntervalMinutes { get; set; } = 10;
+
+    [JsonPropertyName("updateOnlyWhenIpChanged")]
+    public bool UpdateOnlyWhenIpChanged { get; set; } = true;
+
+    [JsonPropertyName("scanBeforeUpdate")]
+    public bool ScanBeforeUpdate { get; set; }
+
+    [JsonPropertyName("lastRunAt")]
+    public DateTimeOffset? LastRunAt { get; set; }
+
+    [JsonPropertyName("lastIp")]
+    public string LastIp { get; set; } = string.Empty;
+
+    [JsonPropertyName("lastStatus")]
+    public string LastStatus { get; set; } = string.Empty;
+
+    [JsonPropertyName("lastMessage")]
+    public string LastMessage { get; set; } = string.Empty;
+}
+
 public sealed class DynamicDnsAccountDto
 {
     [JsonPropertyName("id")]
@@ -616,11 +646,29 @@ public sealed class DynamicDnsAccountDto
     [JsonPropertyName("name")]
     public string Name { get; set; } = "Tài khoản DDNS";
 
+    [JsonPropertyName("authMode")]
+    public string AuthMode { get; set; } = "basic";
+
     [JsonPropertyName("username")]
     public string Username { get; set; } = string.Empty;
 
     [JsonPropertyName("password")]
     public string Password { get; set; } = string.Empty;
+
+    [JsonPropertyName("apiKey")]
+    public string ApiKey { get; set; } = string.Empty;
+
+    [JsonPropertyName("oauthClientId")]
+    public string OAuthClientId { get; set; } = string.Empty;
+
+    [JsonPropertyName("oauthSecret")]
+    public string OAuthSecret { get; set; } = string.Empty;
+
+    [JsonPropertyName("accessToken")]
+    public string AccessToken { get; set; } = string.Empty;
+
+    [JsonPropertyName("accessTokenExpiresAt")]
+    public DateTimeOffset? AccessTokenExpiresAt { get; set; }
 
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; } = true;
@@ -646,6 +694,30 @@ public sealed class DynamicDnsDomainDto
     [JsonPropertyName("hostname")]
     public string Hostname { get; set; } = string.Empty;
 
+    [JsonPropertyName("zoneName")]
+    public string ZoneName { get; set; } = string.Empty;
+
+    [JsonPropertyName("zoneId")]
+    public string ZoneId { get; set; } = string.Empty;
+
+    [JsonPropertyName("recordId")]
+    public string RecordId { get; set; } = string.Empty;
+
+    [JsonPropertyName("recordName")]
+    public string RecordName { get; set; } = string.Empty;
+
+    [JsonPropertyName("recordType")]
+    public string RecordType { get; set; } = "A";
+
+    [JsonPropertyName("ttl")]
+    public int? Ttl { get; set; }
+
+    [JsonPropertyName("proxied")]
+    public bool? Proxied { get; set; }
+
+    [JsonPropertyName("scanSource")]
+    public string ScanSource { get; set; } = string.Empty;
+
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; } = true;
 
@@ -660,6 +732,9 @@ public sealed class DynamicDnsDomainDto
 
     [JsonPropertyName("lastUpdatedAt")]
     public DateTimeOffset? LastUpdatedAt { get; set; }
+
+    [JsonPropertyName("lastScannedAt")]
+    public DateTimeOffset? LastScannedAt { get; set; }
 
     [JsonPropertyName("updateCount")]
     public int UpdateCount { get; set; }
@@ -684,6 +759,9 @@ public sealed class DynamicDnsLogDto
 
     [JsonPropertyName("hostname")]
     public string Hostname { get; set; } = string.Empty;
+
+    [JsonPropertyName("recordType")]
+    public string RecordType { get; set; } = string.Empty;
 
     [JsonPropertyName("ip")]
     public string Ip { get; set; } = string.Empty;
@@ -718,6 +796,14 @@ public sealed class DynamicDnsDomainRequest
     public DynamicDnsDomainDto Domain { get; set; } = new();
 }
 
+public sealed class DynamicDnsScanRequest
+{
+    public string Provider { get; set; } = string.Empty;
+    public string? AccountId { get; set; }
+    public bool OnlyEnabled { get; set; } = true;
+    public bool SaveToConfig { get; set; } = true;
+}
+
 public sealed class DynamicDnsUpdateRequest
 {
     public string Provider { get; set; } = string.Empty;
@@ -736,6 +822,17 @@ public sealed class DynamicDnsBulkUpdateResultDto
     public int SuccessCount { get; set; }
     public int FailedCount { get; set; }
     public List<DynamicDnsLogDto> Logs { get; set; } = [];
+    public DynamicDnsResponseDto? Snapshot { get; set; }
+}
+
+public sealed class DynamicDnsScanResultDto
+{
+    public bool Success { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public int Total { get; set; }
+    public int Added { get; set; }
+    public int Updated { get; set; }
+    public List<DynamicDnsDomainDto> Records { get; set; } = [];
     public DynamicDnsResponseDto? Snapshot { get; set; }
 }
 

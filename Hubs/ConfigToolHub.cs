@@ -1085,6 +1085,52 @@ public sealed class ConfigToolHub : Hub
         return result;
     }
 
+    public async Task<SqlActionResultDto> SaveDynamicDnsAutoUpdateAsync(DynamicDnsAutoUpdateDto settings)
+    {
+        var cancellationToken = Context.ConnectionAborted;
+        var result = await _dynamicDnsService.SaveAutoUpdateAsync(settings, cancellationToken);
+        await NotifyDynamicDnsChangedAsync(result, cancellationToken);
+        return result;
+    }
+
+    public async Task<SqlActionResultDto> AuthorizeDynamicDnsAccountAsync(string accountId)
+    {
+        var cancellationToken = Context.ConnectionAborted;
+        var result = await _dynamicDnsService.AuthorizeAccountAsync(accountId, cancellationToken);
+        await NotifyDynamicDnsChangedAsync(result, cancellationToken);
+        return result;
+    }
+
+    public async Task<DynamicDnsScanResultDto> ScanDynamicDnsAsync(DynamicDnsScanRequest request)
+    {
+        var cancellationToken = Context.ConnectionAborted;
+        try
+        {
+            var result = await _dynamicDnsService.ScanAsync(request, cancellationToken);
+            if (result.Success)
+            {
+                await Clients.All.SendAsync("DynamicDnsChanged", result.Snapshot ?? await _dynamicDnsService.LoadAsync(cancellationToken), result.Message, cancellationToken);
+            }
+            else
+            {
+                await SendDynamicDnsSoftErrorAsync(result.Message);
+            }
+
+            return result;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            var message = "Không scan được DNS: " + ex.Message;
+            await SendDynamicDnsSoftErrorAsync(message);
+            return new DynamicDnsScanResultDto
+            {
+                Success = false,
+                Message = message,
+                Snapshot = await _dynamicDnsService.LoadAsync(CancellationToken.None)
+            };
+        }
+    }
+
     public async Task<DynamicDnsBulkUpdateResultDto> UpdateDynamicDnsAsync(DynamicDnsUpdateRequest request)
     {
         var cancellationToken = Context.ConnectionAborted;
